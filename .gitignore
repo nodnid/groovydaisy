@@ -1,0 +1,26 @@
+# Build artifacts
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# Companion app
+companion/node_modules/
+companion/dist/
+companion/debug.log
+
+# IDE/Editor
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Claude Code
+.claude/

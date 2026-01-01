@@ -1063,11 +1063,32 @@ However, USB CDC bandwidth limitations caused inconsistent delivery.
 **Create:** `pod/GroovyDaisy/audio_track.h`
 **Modify:** `pod/GroovyDaisy/GroovyDaisy.cpp`, `pod/GroovyDaisy/sequencer.h`, `pod/GroovyDaisy/protocol.h`
 
+**Constraints:**
+- Maximum pattern length: **8 bars** (no 16-bar patterns)
+- Maximum frozen tracks: **3** (leave memory for future features)
+- Tempo/bar count locked while any track is frozen
+
 **Memory Budget:**
-- 4-bar pattern @ 120 BPM = 8 seconds
-- Stereo float @ 48kHz = 384,000 samples × 4 bytes × 2 channels = 3.07 MB per track
-- 4 audio track buffers = ~12 MB
-- Remaining SDRAM: ~52 MB (plenty for samples + future features)
+
+| BPM | 4 bars | 8 bars |
+|-----|--------|--------|
+| 60 | 5.86 MB | 11.72 MB |
+| 90 | 3.91 MB | 7.81 MB |
+| 120 | 2.93 MB | 5.86 MB |
+| 150 | 2.34 MB | 4.69 MB |
+
+Worst case (3 tracks × 8 bars @ 60 BPM):
+- Drums: ~8 MB
+- 3 frozen tracks: ~35 MB
+- **Total: ~43 MB**
+- **Reserved for future: ~21 MB** (custom samples, effects, resampling, etc.)
+
+Typical case (3 tracks × 4 bars @ 120 BPM):
+- Total: ~17 MB
+- Available: ~47 MB
+
+**Future: Resample to Combine Tracks**
+When all 3 slots are used, user can resample/bounce multiple frozen tracks into one, freeing slots for more layers.
 
 **Daisy Implementation:**
 
@@ -1076,7 +1097,7 @@ However, USB CDC bandwidth limitations caused inconsistent delivery.
 struct AudioTrack {
     float* buffer_L;           // Pointer into SDRAM
     float* buffer_R;
-    size_t length;             // Buffer length in samples
+    size_t length;             // Buffer length in samples (varies by tempo/bars)
     size_t playhead;           // Current playback position
     bool is_flattened;         // true = play audio, false = play MIDI through synth
     bool is_rendering;         // true during flatten operation
@@ -1085,10 +1106,12 @@ struct AudioTrack {
 
 2. **SDRAM allocation:**
 ```cpp
-// 4 audio track buffers (stereo, 8 seconds each @ 48kHz)
-constexpr size_t AUDIO_TRACK_SAMPLES = 48000 * 8;  // 8 seconds
-float DSY_SDRAM_BSS audio_track_L[4][AUDIO_TRACK_SAMPLES];
-float DSY_SDRAM_BSS audio_track_R[4][AUDIO_TRACK_SAMPLES];
+// 3 audio track buffers (stereo, 32 seconds max each @ 48kHz)
+// 32 sec = 8 bars @ 60 BPM worst case
+constexpr size_t MAX_AUDIO_TRACK_SAMPLES = 48000 * 32;  // 32 seconds
+float DSY_SDRAM_BSS audio_track_L[3][MAX_AUDIO_TRACK_SAMPLES];
+float DSY_SDRAM_BSS audio_track_R[3][MAX_AUDIO_TRACK_SAMPLES];
+// Total: ~35 MB reserved for frozen tracks
 ```
 
 3. **Flatten operation:**
@@ -1127,23 +1150,30 @@ if(track.is_flattened) {
 - Visual feedback during render (progress or "Rendering...")
 
 **Workflow Example:**
-1. Record bass line on synth (MIDI)
+1. Record bass line on synth (MIDI) → Track 1
 2. Tweak synth preset for bass sound
 3. Click "Flatten" → pattern plays once, audio captured
-4. Bass track now shows "Audio" status
+4. Track 1 now shows "Audio" status, tempo locked
 5. Change synth preset to pad sound
-6. Record chord progression (MIDI)
-7. Click "Flatten" on chord track
-8. Both tracks play as audio with distinct sounds
-9. Total CPU: ~10% (just sample playback)
+6. Record chord progression (MIDI) → Track 2
+7. Click "Flatten" on Track 2
+8. Change preset to lead sound
+9. Record melody (MIDI) → Track 3
+10. Click "Flatten" on Track 3
+11. All 3 tracks play as audio with distinct sounds
+12. Total CPU: ~10% (just sample playback)
+13. Want more layers? Resample tracks together to free slots (future feature)
 
 **Test:**
 - Record 4-bar synth pattern
-- Flatten track
-- Verify audio plays back identically
-- Change synth preset → verify flattened track unchanged
-- Unflatten → verify MIDI plays through synth again
-- Flatten multiple tracks → verify all play together
+- Flatten track → verify audio plays back identically
+- Try to change tempo → verify locked (shows warning)
+- Change synth preset → verify flattened track sound unchanged
+- Unflatten → verify MIDI plays through synth again, tempo unlocked
+- Flatten all 3 tracks → verify all play together
+- Try to flatten 4th → verify blocked (max 3 frozen)
+- Test at different tempos: 60, 120, 180 BPM
+- Test at 4 and 8 bar patterns
 
 ---
 

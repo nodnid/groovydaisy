@@ -330,6 +330,44 @@ class Engine
         return 0;
     }
 
+    /**
+     * Get events from a track for pattern dump
+     * @param track Track index (0-11)
+     * @param offset Starting event index
+     * @param buffer Output buffer (7 bytes per event: tick:4, status:1, data1:1, data2:1)
+     * @param max_events Maximum events to copy
+     * @return Number of events actually copied
+     */
+    uint16_t GetTrackEvents(uint8_t track, uint16_t offset, uint8_t* buffer, uint16_t max_events) const
+    {
+        if(track >= NUM_TOTAL_TRACKS)
+            return 0;
+
+        const Track& t = tracks_[track];
+        uint16_t count = 0;
+
+        for(uint16_t i = offset; i < t.event_count && count < max_events; i++)
+        {
+            const MidiEvent& ev = t.events[i];
+            size_t base = count * 7;
+
+            // Write tick (4 bytes, little-endian)
+            buffer[base + 0] = ev.tick & 0xFF;
+            buffer[base + 1] = (ev.tick >> 8) & 0xFF;
+            buffer[base + 2] = (ev.tick >> 16) & 0xFF;
+            buffer[base + 3] = (ev.tick >> 24) & 0xFF;
+
+            // Write status, data1, data2
+            buffer[base + 4] = ev.status;
+            buffer[base + 5] = ev.data1;
+            buffer[base + 6] = ev.data2;
+
+            count++;
+        }
+
+        return count;
+    }
+
   private:
     Track    tracks_[NUM_TOTAL_TRACKS];
     uint32_t pattern_length_;

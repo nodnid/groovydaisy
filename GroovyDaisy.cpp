@@ -29,6 +29,7 @@
 #include "cc_map.h"
 #include "midi_router.h"
 #include "automation.h"
+#include "audio_track.h"
 #include "samples/drums.h"
 #include "util/CpuLoadMeter.h"
 
@@ -46,6 +47,13 @@ CCMap::Engine cc_engine;
 
 // Sample bank in SDRAM (must be at global scope with DSY_SDRAM_BSS)
 DrumSamples::SampleBank DSY_SDRAM_BSS sample_bank;
+
+// Audio track buffers in SDRAM for frozen tracks (3 slots × stereo × 32 sec max)
+float DSY_SDRAM_BSS frozen_track_L[AudioTrack::NUM_FROZEN_SLOTS][AudioTrack::MAX_TRACK_SAMPLES];
+float DSY_SDRAM_BSS frozen_track_R[AudioTrack::NUM_FROZEN_SLOTS][AudioTrack::MAX_TRACK_SAMPLES];
+
+// Audio track manager for freeze/unfreeze operations
+AudioTrack::Manager audio_track_manager;
 
 // CPU load meter for diagnostics
 CpuLoadMeter cpu_meter;
@@ -65,6 +73,14 @@ volatile uint32_t debug_queue_full = 0;
 
 // Flag to send transport state update
 static volatile bool send_transport_update = false;
+
+// Flag to send track state update (after freeze completes)
+static volatile bool send_track_state_update = false;
+
+// Staggered pattern dump state (to avoid USB buffer overflow)
+static uint8_t pending_dump_track = 0xFF;  // 0xFF = no pending dump
+static uint32_t last_dump_time = 0;
+constexpr uint32_t DUMP_INTERVAL_MS = 10;  // 10ms between track dumps
 
 // Voice count tracking for MSG_VOICES
 static volatile uint8_t last_synth_count = 0;
@@ -290,17 +306,41 @@ void SequencerPlaybackCallback(uint8_t status, uint8_t data1, uint8_t data2)
     }
 }
 
-// Audio callback - processes transport timing, synth, and drums
+// Audio callback - processes transport timing, synth, drums, and frozen tracks
 void AudioCallback(AudioHandle::InputBuffer  in,
                    AudioHandle::OutputBuffer out,
                    size_t                    size)
 {
     cpu_meter.OnBlockStart();
 
+    // Check if currently rendering a freeze
+    bool is_rendering = (audio_track_manager.GetRenderTarget() != AudioTrack::NO_SLOT);
+    bool has_pending = audio_track_manager.HasPendingFreeze();
+
     for(size_t i = 0; i < size; i++)
     {
         // Process transport timing (once per sample)
         bool new_tick = transport.Process();
+
+        // Check for pattern loop (used for freeze state transitions)
+        if(transport.CheckPatternLooped())
+        {
+            if(has_pending)
+            {
+                // Pattern looped while pending - start recording
+                audio_track_manager.BeginRecording();
+                is_rendering = true;
+                has_pending = false;
+                send_track_state_update = true;
+            }
+            else if(is_rendering)
+            {
+                // Pattern looped while rendering - finalize the freeze
+                audio_track_manager.FinalizeFreeze();
+                is_rendering = false;
+                send_track_state_update = true;
+            }
+        }
 
         // Process sequencer and automation playback on each new tick
         if(new_tick && (transport.IsPlaying() || transport.IsRecording()))
@@ -314,15 +354,38 @@ void AudioCallback(AudioHandle::InputBuffer  in,
         float synth_left, synth_right;
         synth.ProcessStereo(&synth_left, &synth_right);
 
+        // If currently rendering a freeze, capture synth output to buffer
+        if(is_rendering)
+        {
+            audio_track_manager.WriteRenderSample(synth_left, synth_right);
+        }
+
+        // Read audio from all frozen tracks (only when playing)
+        float frozen_left = 0.0f, frozen_right = 0.0f;
+        bool is_playing = transport.IsPlaying() || transport.IsRecording();
+        if(is_playing)
+        {
+            for(uint8_t t = 0; t < AudioTrack::Manager::NUM_SYNTH_TRACKS; t++)
+            {
+                if(audio_track_manager.IsTrackFrozen(t))
+                {
+                    float fl, fr;
+                    audio_track_manager.ReadFrozenSample(t, fl, fr);
+                    frozen_left += fl;
+                    frozen_right += fr;
+                }
+            }
+        }
+
         // Process drum sampler (stereo)
         float drum_left, drum_right;
         sampler.ProcessStereo(&drum_left, &drum_right);
 
-        // Mix synth + drums with audio input (passthrough)
+        // Mix: synth (live) + frozen tracks + drums
         // Apply master output level from CC engine
         float master = cc_engine.GetMasterOutput();
-        out[0][i] = in[0][i] + (synth_left + drum_left) * master;
-        out[1][i] = in[1][i] + (synth_right + drum_right) * master;
+        out[0][i] = in[0][i] + (synth_left + frozen_left + drum_left) * master;
+        out[1][i] = in[1][i] + (synth_right + frozen_right + drum_right) * master;
     }
 
     // Check if transport state changed (flag for main loop)
@@ -563,6 +626,109 @@ void SendSynthState()
     SendMessage(Protocol::MSG_SYNTH_STATE, payload, idx);
 }
 
+// Send resource usage (memory + CPU)
+void SendResources()
+{
+    // Calculate memory usage
+    // Base: drum samples (TOTAL_SAMPLES floats at 4 bytes each)
+    constexpr size_t DRUM_SAMPLES_SIZE = DrumSamples::TOTAL_SAMPLES * sizeof(float);
+    size_t memory_used = DRUM_SAMPLES_SIZE + audio_track_manager.GetUsedMemory();
+    constexpr size_t memory_total = 64 * 1024 * 1024;  // 64 MB SDRAM
+
+    // Get CPU load as percentage (0-100)
+    uint8_t cpu_pct = static_cast<uint8_t>(cpu_meter.GetAvgCpuLoad() * 100.0f);
+
+    // Payload: [mem_used:4][mem_total:4][cpu:1]
+    uint8_t payload[9];
+    payload[0] = memory_used & 0xFF;
+    payload[1] = (memory_used >> 8) & 0xFF;
+    payload[2] = (memory_used >> 16) & 0xFF;
+    payload[3] = (memory_used >> 24) & 0xFF;
+    payload[4] = memory_total & 0xFF;
+    payload[5] = (memory_total >> 8) & 0xFF;
+    payload[6] = (memory_total >> 16) & 0xFF;
+    payload[7] = (memory_total >> 24) & 0xFF;
+    payload[8] = cpu_pct;
+
+    SendMessage(Protocol::MSG_RESOURCES, payload, 9);
+}
+
+// Send track state for all synth tracks
+void SendTrackState()
+{
+    // 4 synth tracks × [id:1][status:1][frozen_slot:1][source:1]
+    uint8_t payload[16];
+
+    for(uint8_t i = 0; i < AudioTrack::Manager::NUM_SYNTH_TRACKS; i++)
+    {
+        const AudioTrack::TrackState& ts = audio_track_manager.GetTrackState(i);
+        size_t base = i * 4;
+        payload[base + 0] = i + 8;  // Track ID (8-11 for synth tracks)
+        payload[base + 1] = static_cast<uint8_t>(ts.status);
+        payload[base + 2] = ts.frozen_slot;
+        payload[base + 3] = i;      // Source track (same as synth track index)
+    }
+
+    SendMessage(Protocol::MSG_TRACK_STATE, payload, 16);
+}
+
+// Send pattern dump for a single track
+// Sends in chunks if track has many events (max ~35 per message)
+void SendPatternDump(uint8_t track_id)
+{
+    // Get events from sequencer
+    // Track IDs: 0-7 = drums, 8-11 = synth
+    uint16_t event_count = sequencer.GetTrackEventCount(track_id);
+
+    if(event_count == 0)
+    {
+        // Send empty dump with count = 0
+        uint8_t payload[5] = {track_id, 0, 0, 0, 0};
+        SendMessage(Protocol::MSG_PATTERN_DUMP, payload, 5);
+        return;
+    }
+
+    // Send events in chunks
+    // Each event: [tick:4][status:1][data1:1][data2:1] = 7 bytes
+    // Max ~35 events per 256-byte payload (after 5-byte header)
+    constexpr uint16_t MAX_EVENTS_PER_MSG = 35;
+
+    uint16_t offset = 0;
+    while(offset < event_count)
+    {
+        // Build payload header
+        uint8_t payload[5 + MAX_EVENTS_PER_MSG * 7];
+        payload[0] = track_id;
+        payload[1] = offset & 0xFF;
+        payload[2] = (offset >> 8) & 0xFF;
+
+        // Get events from sequencer into payload buffer
+        uint16_t copied = sequencer.GetTrackEvents(track_id, offset, &payload[5], MAX_EVENTS_PER_MSG);
+
+        // Update count in header
+        payload[3] = copied & 0xFF;
+        payload[4] = (copied >> 8) & 0xFF;
+
+        // Calculate total payload length
+        size_t payload_len = 5 + (copied * 7);
+
+        SendMessage(Protocol::MSG_PATTERN_DUMP, payload, payload_len);
+
+        offset += copied;
+
+        // Safety check - break if no events copied to prevent infinite loop
+        if(copied == 0)
+            break;
+    }
+}
+
+// Send pattern clear notification
+void SendPatternClear(uint8_t track_id)
+{
+    uint8_t payload[1] = {track_id};
+    SendMessage(Protocol::MSG_PATTERN_CLEAR, payload, 1);
+}
+
 // Check if received text matches a command
 bool MatchCommand(const char* cmd)
 {
@@ -610,7 +776,13 @@ void ProcessBinaryCommand()
             synth.AllNotesOff();
             sequencer.ResetPlayback();
             automation.ResetPlayback();
+            audio_track_manager.ResetPlayheads();
             SendTransport();
+            // Start staggered pattern dump (avoids USB buffer overflow)
+            pending_dump_track = 0;
+            last_dump_time = 0;  // Send first one immediately
+            SendTrackState();
+            SendResources();
             SendDebug("CMD: STOP");
             break;
 
@@ -637,6 +809,11 @@ void ProcessBinaryCommand()
             SendTransport();
             SendTick();
             SendVoices();
+            SendTrackState();
+            SendResources();
+            // Start staggered pattern dump (avoids USB buffer overflow)
+            pending_dump_track = 0;
+            last_dump_time = 0;  // Send first one immediately
             SendDebug("CMD: STATE");
             break;
 
@@ -684,6 +861,71 @@ void ProcessBinaryCommand()
                     SendDebug(buf);
                 }
             }
+            break;
+
+        case Protocol::CMD_FREEZE_TRACK:
+            if(parser.payload_len >= 1)
+            {
+                uint8_t synth_track = parser.payload[0];
+                // Convert from track ID (8-11) to synth track index (0-3)
+                if(synth_track >= 8)
+                    synth_track -= 8;
+
+                if(audio_track_manager.StartFreeze(synth_track))
+                {
+                    SendDebug("CMD: FREEZE started");
+                    SendTrackState();
+                    SendResources();
+                }
+                else
+                {
+                    SendDebug("CMD: FREEZE failed (no slots)");
+                }
+            }
+            break;
+
+        case Protocol::CMD_UNFREEZE_TRACK:
+            if(parser.payload_len >= 1)
+            {
+                uint8_t synth_track = parser.payload[0];
+                // Convert from track ID (8-11) to synth track index (0-3)
+                if(synth_track >= 8)
+                    synth_track -= 8;
+
+                if(audio_track_manager.Unfreeze(synth_track))
+                {
+                    SendDebug("CMD: UNFREEZE done");
+                    SendTrackState();
+                    SendResources();
+                }
+                else
+                {
+                    SendDebug("CMD: UNFREEZE failed");
+                }
+            }
+            break;
+
+        case Protocol::CMD_REQ_PATTERN:
+            // Request pattern dump for one or all tracks
+            if(parser.payload_len >= 1)
+            {
+                // Single track request
+                uint8_t track_id = parser.payload[0];
+                if(track_id < Sequencer::NUM_TOTAL_TRACKS)
+                {
+                    SendPatternDump(track_id);
+                }
+            }
+            else
+            {
+                // All tracks request
+                for(uint8_t i = 0; i < Sequencer::NUM_TOTAL_TRACKS; i++)
+                {
+                    SendPatternDump(i);
+                }
+            }
+            SendTrackState();
+            SendResources();
             break;
 
         default:
@@ -739,6 +981,17 @@ int main(void)
     // Initialize CC mapping engine (4-bank system)
     cc_engine.Init();
 
+    // Initialize audio track manager for freeze/unfreeze
+    // Set up buffer pointers for the 3 frozen track slots
+    float* buf_l[AudioTrack::NUM_FROZEN_SLOTS];
+    float* buf_r[AudioTrack::NUM_FROZEN_SLOTS];
+    for(uint8_t i = 0; i < AudioTrack::NUM_FROZEN_SLOTS; i++)
+    {
+        buf_l[i] = frozen_track_L[i];
+        buf_r[i] = frozen_track_R[i];
+    }
+    audio_track_manager.Init(buf_l, buf_r);
+
     // Connect sequencer playback to callback (for unified routing)
     sequencer.SetPlaybackCallback(SequencerPlaybackCallback);
 
@@ -770,10 +1023,13 @@ int main(void)
     SendCCBank();
     SendFaderState();
     SendMixerState();
+    SendTrackState();
+    SendResources();
 
     // Timing
     uint32_t last_tick_send      = 0;
     uint32_t last_transport_send = 0;
+    uint32_t last_resources_send = 0;
     uint32_t flash_start         = 0;
     bool     midi_flash          = false;
 
@@ -866,6 +1122,30 @@ int main(void)
             SendTick();
         }
 
+        // Staggered pattern dump - send one track at a time to avoid USB overflow
+        if(pending_dump_track < Sequencer::NUM_TOTAL_TRACKS)
+        {
+            if(now - last_dump_time >= DUMP_INTERVAL_MS)
+            {
+                SendPatternDump(pending_dump_track);
+                pending_dump_track++;
+                last_dump_time = now;
+
+                // Log completion
+                if(pending_dump_track >= Sequencer::NUM_TOTAL_TRACKS)
+                {
+                    pending_dump_track = 0xFF;  // Done
+                    SendDebug("Pattern sync complete");
+                }
+            }
+        }
+
+        // Send RESOURCES message at ~1fps (every 1000ms) - CPU meter updates
+        if(now - last_resources_send >= 1000)
+        {
+            last_resources_send = now;
+            SendResources();
+        }
 
         // Send TRANSPORT message on state change from audio callback
         if(send_transport_update)
@@ -879,6 +1159,15 @@ int main(void)
         {
             send_voices_update = false;
             SendVoices();
+        }
+
+        // Send TRACK_STATE and RESOURCES after freeze state changes
+        if(send_track_state_update)
+        {
+            send_track_state_update = false;
+            SendTrackState();
+            SendResources();
+            SendDebug("Track state updated");
         }
 
         // Periodic synth diagnostics (every 2 seconds)

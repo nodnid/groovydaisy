@@ -14,6 +14,8 @@ import {
   ParsedMessage,
   SynthParams,
   SynthParamId,
+  PatternEvent,
+  TrackStatus,
   MSG_TICK,
   MSG_DEBUG,
   MSG_TRANSPORT,
@@ -23,12 +25,18 @@ import {
   MSG_CC_BANK,
   MSG_FADER_STATE,
   MSG_MIXER_STATE,
+  MSG_TRACK_STATE,
+  MSG_PATTERN_DUMP,
+  MSG_PATTERN_CLEAR,
+  MSG_RESOURCES,
   getMessageTypeName,
   buildSetBankCommand,
   buildMessage,
   buildSynthParamCommand,
   buildLoadPresetCommand,
   buildRequestSynthCommand,
+  buildFreezeTrackCommand,
+  buildUnfreezeTrackCommand,
   getDefaultSynthParams,
   CMD_PLAY,
   CMD_STOP,
@@ -36,6 +44,8 @@ import {
   CMD_TEMPO,
   CMD_REQ_STATE,
 } from './core/protocol'
+import TabBar, { type TabId } from './components/global/TabBar'
+import ArrangeView from './components/arrange/ArrangeView'
 import { parseMidiMessage } from './core/midi-utils'
 
 // CC value converters (CC 0-127 to parameter value)
@@ -87,10 +97,37 @@ function App() {
     Array(9).fill({ pickedUp: true, needsPickup: false })
   )
   const [mixerState, setMixerState] = useState<MixerState>(getDefaultMixerState())
+
+  // Tab navigation
+  const [activeTab, setActiveTab] = useState<TabId>('arrange')
+
+  // Resources (memory + CPU)
+  const [resources, setResources] = useState({ memoryUsed: 0, memoryTotal: 64 * 1024 * 1024, cpuLoad: 0 })
+
+  // Track states for synth tracks (index 8-11 in sequencer)
+  const [synthTrackStates, setSynthTrackStates] = useState<Array<{ status: TrackStatus; frozenSlot: number }>>(
+    Array(4).fill({ status: TrackStatus.MIDI, frozenSlot: 0xff })
+  )
+
+  // Pattern data: 12 tracks (8 drums + 4 synth)
+  const [patternData, setPatternData] = useState<PatternEvent[][]>(
+    Array(12).fill([]).map(() => [])
+  )
+
+  // Pending events: real-time MIDI events during recording (not yet synced from Daisy)
+  // These are displayed with different styling until confirmed by pattern dump
+  const [pendingEvents, setPendingEvents] = useState<PatternEvent[][]>(
+    Array(12).fill([]).map(() => [])
+  )
+
   const serialRef = useRef<WebSerialPort | null>(null)
   const parserRef = useRef<ProtocolParser | null>(null)
   const currentBankRef = useRef<Bank>(currentBank)
   currentBankRef.current = currentBank  // Keep ref in sync with state
+  const transportRef = useRef<TransportState>(transport)
+  transportRef.current = transport  // Keep ref in sync with state
+  const tickRef = useRef<number>(tickCounter)
+  tickRef.current = tickCounter  // Keep ref in sync with state
 
   // Calculate position from tick counter (with pattern wrapping)
   // The tick from Daisy is already wrapped, but handle it defensively
@@ -145,6 +182,47 @@ function App() {
             }
             return newMsgs
           })
+
+          // Track pending events for real-time display during recording
+          if (transportRef.current.recording) {
+            const channel = msg.status & 0x0F
+            const type = msg.status & 0xF0
+            const tick = tickRef.current % PATTERN_TICKS
+
+            // Drum events (channel 10, NoteOn with velocity > 0)
+            if (channel === 9 && type === 0x90 && msg.data2 > 0) {
+              const note = msg.data1
+              if (note >= 36 && note <= 43) {
+                const trackIdx = note - 36  // Drum tracks 0-7
+                setPendingEvents(prev => {
+                  const next = [...prev]
+                  next[trackIdx] = [...prev[trackIdx], {
+                    tick,
+                    status: msg.status,
+                    data1: msg.data1,
+                    data2: msg.data2,
+                  }]
+                  return next
+                })
+              }
+            }
+
+            // Synth events (channel 1, NoteOn or NoteOff)
+            if (channel === 0 && (type === 0x90 || type === 0x80)) {
+              const note = msg.data1
+              const trackIdx = 8 + (note % 4)  // Synth tracks 8-11
+              setPendingEvents(prev => {
+                const next = [...prev]
+                next[trackIdx] = [...prev[trackIdx], {
+                  tick,
+                  status: msg.status,
+                  data1: msg.data1,
+                  data2: msg.data2,
+                }]
+                return next
+              })
+            }
+          }
 
           // Update UI state from CC values
           const isCC = (msg.status & 0xF0) === 0xB0
@@ -256,6 +334,52 @@ function App() {
           masterOut: msg.masterOut,
         })
         break
+      case MSG_RESOURCES:
+        setResources({
+          memoryUsed: msg.memoryUsed,
+          memoryTotal: msg.memoryTotal,
+          cpuLoad: msg.cpuLoad,
+        })
+        break
+      case MSG_TRACK_STATE:
+        // Update synth track states from firmware
+        setSynthTrackStates(msg.tracks.map(t => ({
+          status: t.status,
+          frozenSlot: t.frozenSlot,
+        })))
+        break
+      case MSG_PATTERN_DUMP:
+        // Update pattern data for a track
+        setPatternData(prev => {
+          const next = [...prev]
+          const trackId = msg.trackId
+
+          if (msg.offset === 0) {
+            // First chunk - replace events
+            next[trackId] = [...msg.events]
+          } else {
+            // Subsequent chunk - append events
+            next[trackId] = [...prev[trackId], ...msg.events]
+          }
+          return next
+        })
+        // Clear pending events for this track (confirmed data arrived)
+        if (msg.offset === 0) {
+          setPendingEvents(prev => {
+            const next = [...prev]
+            next[msg.trackId] = []
+            return next
+          })
+        }
+        break
+      case MSG_PATTERN_CLEAR:
+        // Clear a track's pattern data
+        setPatternData(prev => {
+          const next = [...prev]
+          next[msg.trackId] = []
+          return next
+        })
+        break
       default:
         addLog('>', `${getMessageTypeName((msg as ParsedMessage).type)}: ${JSON.stringify(msg)}`)
     }
@@ -309,6 +433,20 @@ function App() {
   const handleBankChange = useCallback((bank: Bank) => {
     if (serialRef.current) {
       const msg = buildSetBankCommand(bank)
+      serialRef.current.send(msg)
+    }
+  }, [])
+
+  const handleFreezeTrack = useCallback((trackId: number) => {
+    if (serialRef.current) {
+      const msg = buildFreezeTrackCommand(trackId)
+      serialRef.current.send(msg)
+    }
+  }, [])
+
+  const handleUnfreezeTrack = useCallback((trackId: number) => {
+    if (serialRef.current) {
+      const msg = buildUnfreezeTrackCommand(trackId)
       serialRef.current.send(msg)
     }
   }, [])
@@ -441,70 +579,108 @@ function App() {
         />
       </div>
 
+      {/* Tab Bar */}
+      <div className="px-4 pt-3">
+        <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+      </div>
+
       {/* Main Content */}
       <main className="flex-1 p-4 space-y-4 overflow-y-auto">
-        {/* Top Row - MIDI Monitor, Engine State, Presets */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <MidiMonitor
-            messages={midiMessages}
-            onClear={() => setMidiMessages([])}
+        {/* Arrange Tab */}
+        {activeTab === 'arrange' && (
+          <ArrangeView
+            memoryUsed={resources.memoryUsed}
+            memoryTotal={resources.memoryTotal}
+            cpuLoad={resources.cpuLoad}
+            synthTracks={synthTrackStates.map((state, i) => ({
+              id: i + 8,  // Track IDs 8-11 for synth
+              status: state.status,
+              frozenSlot: state.frozenSlot,
+              events: patternData[i + 8] || [],
+              pendingEvents: pendingEvents[i + 8] || [],
+            }))}
+            drumEvents={patternData.slice(0, 8)}
+            pendingDrumEvents={pendingEvents.slice(0, 8)}
+            playheadTick={tickCounter}
+            playing={transport.playing}
+            connected={connected}
+            onFreezeTrack={handleFreezeTrack}
+            onUnfreezeTrack={handleUnfreezeTrack}
           />
-          <EngineState
-            tickCounter={tickCounter}
-            checksumErrors={checksumErrors}
-            transport={transport}
-            position={position}
-            synthVoices={voiceState.synth}
-          />
-          <PresetManager
-            currentPresetIndex={presetIndex}
-            currentParams={synthParams}
-            onLoadFactoryPreset={handleLoadFactoryPreset}
-            onLoadUserPreset={handleLoadUserPreset}
+        )}
+
+        {/* Synth Tab */}
+        {activeTab === 'synth' && (
+          <>
+            <PresetManager
+              currentPresetIndex={presetIndex}
+              currentParams={synthParams}
+              onLoadFactoryPreset={handleLoadFactoryPreset}
+              onLoadUserPreset={handleLoadUserPreset}
+              connected={connected}
+            />
+            <SynthPanel
+              params={synthParams}
+              onParamChange={handleSynthParamChange}
+              connected={connected}
+            />
+          </>
+        )}
+
+        {/* Mix Tab */}
+        {activeTab === 'mix' && (
+          <CCControlPanel
+            currentBank={currentBank}
+            faderStates={faderStates}
+            mixerState={mixerState}
+            synthParams={synthParams}
+            onBankChange={handleBankChange}
             connected={connected}
           />
-        </div>
+        )}
 
-        {/* CC Control Panel */}
-        <CCControlPanel
-          currentBank={currentBank}
-          faderStates={faderStates}
-          mixerState={mixerState}
-          synthParams={synthParams}
-          onBankChange={handleBankChange}
-          connected={connected}
-        />
-
-        {/* Synth Panel */}
-        <SynthPanel
-          params={synthParams}
-          onParamChange={handleSynthParamChange}
-          connected={connected}
-        />
-
-        {/* Debug Messages */}
-        {debugMessages.length > 0 && (
-          <div className="bg-groove-panel border border-groove-border rounded-lg">
-            <div className="px-4 py-3 border-b border-groove-border flex items-center justify-between">
-              <h2 className="font-semibold text-groove-text">Debug Messages</h2>
-              <button
-                onClick={() => setDebugMessages([])}
-                className="text-xs text-groove-muted hover:text-groove-text"
-              >
-                Clear
-              </button>
+        {/* Debug Tab */}
+        {activeTab === 'debug' && (
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <MidiMonitor
+                messages={midiMessages}
+                onClear={() => setMidiMessages([])}
+              />
+              <EngineState
+                tickCounter={tickCounter}
+                checksumErrors={checksumErrors}
+                transport={transport}
+                position={position}
+                synthVoices={voiceState.synth}
+              />
             </div>
-            <div className="p-4 max-h-48 overflow-y-auto font-mono text-xs space-y-1">
-              {debugMessages.map((msg, i) => (
-                <div key={i} className="flex gap-2">
-                  <span className="text-groove-muted opacity-50">
-                    {new Date(msg.timestamp).toLocaleTimeString()}
-                  </span>
-                  <span className="text-groove-yellow">{msg.text}</span>
+
+            {/* Debug Messages */}
+            {debugMessages.length > 0 && (
+              <div className="bg-groove-panel border border-groove-border rounded-lg">
+                <div className="px-4 py-3 border-b border-groove-border flex items-center justify-between">
+                  <h2 className="font-semibold text-groove-text">Debug Messages</h2>
+                  <button
+                    onClick={() => setDebugMessages([])}
+                    className="text-xs text-groove-muted hover:text-groove-text"
+                  >
+                    Clear
+                  </button>
                 </div>
-              ))}
-            </div>
-          </div>
+                <div className="p-4 max-h-48 overflow-y-auto font-mono text-xs space-y-1">
+                  {debugMessages.map((msg, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="text-groove-muted opacity-50">
+                        {new Date(msg.timestamp).toLocaleTimeString()}
+                      </span>
+                      <span className="text-groove-yellow">{msg.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </main>
 

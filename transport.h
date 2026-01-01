@@ -78,8 +78,9 @@ class Engine
         pattern_bars_  = DEFAULT_BARS;
         pattern_ticks_ = pattern_bars_ * TICKS_PER_BAR;
         position_.Reset();
-        accumulator_   = 0.0f;
-        state_changed_ = false;
+        accumulator_    = 0.0f;
+        state_changed_  = false;
+        pattern_looped_ = false;
 
         UpdateTickInterval();
     }
@@ -109,6 +110,7 @@ class Engine
             if(position_.tick >= pattern_ticks_)
             {
                 position_.tick = 0;
+                pattern_looped_ = true;  // Signal that pattern just looped
             }
 
             position_.UpdateFromTick();
@@ -247,6 +249,17 @@ class Engine
      */
     bool IsOnBar() const { return IsOnBeat() && position_.beat == 1; }
 
+    /**
+     * Check and clear pattern looped flag
+     * Use this to detect when pattern has looped (for freeze finalization)
+     */
+    bool CheckPatternLooped()
+    {
+        bool looped     = pattern_looped_;
+        pattern_looped_ = false;
+        return looped;
+    }
+
   private:
     void UpdateTickInterval()
     {
@@ -266,6 +279,7 @@ class Engine
     float    accumulator_;
     float    samples_per_tick_;
     bool     state_changed_;
+    bool     pattern_looped_;
 };
 
 } // namespace Transport

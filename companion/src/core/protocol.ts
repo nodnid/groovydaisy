@@ -23,6 +23,10 @@ export const MSG_SYNTH_STATE = 0x06
 export const MSG_CC_BANK = 0x07
 export const MSG_FADER_STATE = 0x08
 export const MSG_MIXER_STATE = 0x09
+export const MSG_TRACK_STATE = 0x0a    // Track freeze status
+export const MSG_PATTERN_DUMP = 0x10   // Pattern events dump
+export const MSG_PATTERN_CLEAR = 0x11  // Track was cleared
+export const MSG_RESOURCES = 0x12      // Memory + CPU stats
 export const MSG_DEBUG = 0xff
 
 // Message types: Companion -> Daisy
@@ -34,8 +38,22 @@ export const CMD_PATTERN = 0x84
 export const CMD_SYNTH_PARAM = 0x85
 export const CMD_LOAD_PRESET = 0x86
 export const CMD_SET_BANK = 0x87
+export const CMD_FREEZE_TRACK = 0x88    // Start freeze render
+export const CMD_UNFREEZE_TRACK = 0x89  // Unfreeze track
 export const CMD_REQ_STATE = 0x90
+export const CMD_REQ_PATTERN = 0x91     // Request pattern dump
 export const CMD_REQ_SYNTH = 0x92
+
+// Track status enum
+export enum TrackStatus {
+  MIDI = 0,       // Live synth processing
+  PENDING = 1,    // Waiting for pattern loop to start recording
+  RENDERING = 2,  // Currently bouncing to audio
+  AUDIO = 3,      // Playing frozen audio buffer
+}
+
+// Special value for "not frozen"
+export const NO_FROZEN_SLOT = 0xff
 
 // Synth parameter IDs (must match synth.h ParamId enum)
 export enum SynthParamId {
@@ -118,6 +136,45 @@ export interface MixerStateMessage {
   masterOut: number      // 0-127
 }
 
+export interface TrackStateInfo {
+  id: number
+  status: TrackStatus
+  frozenSlot: number  // 0-2 or NO_FROZEN_SLOT (0xFF)
+  sourceTrack: number
+}
+
+export interface TrackStateMessage {
+  type: typeof MSG_TRACK_STATE
+  tracks: TrackStateInfo[]  // 4 synth tracks
+}
+
+export interface PatternEvent {
+  tick: number
+  status: number
+  data1: number
+  data2: number
+}
+
+export interface PatternDumpMessage {
+  type: typeof MSG_PATTERN_DUMP
+  trackId: number
+  offset: number        // Starting event index
+  count: number         // Events in this message
+  events: PatternEvent[]
+}
+
+export interface PatternClearMessage {
+  type: typeof MSG_PATTERN_CLEAR
+  trackId: number
+}
+
+export interface ResourcesMessage {
+  type: typeof MSG_RESOURCES
+  memoryUsed: number    // bytes
+  memoryTotal: number   // bytes (64 MB for Daisy)
+  cpuLoad: number       // 0-100 percent
+}
+
 // Synth parameters - mirrors SynthParams struct in synth.h
 export interface SynthParams {
   osc1Wave: number
@@ -162,6 +219,10 @@ export type ParsedMessage =
   | CCBankMessage
   | FaderStateMessage
   | MixerStateMessage
+  | TrackStateMessage
+  | PatternDumpMessage
+  | PatternClearMessage
+  | ResourcesMessage
 
 // Parser state
 enum ParserState {
@@ -259,6 +320,31 @@ export function buildRequestSynthCommand(): Uint8Array {
  */
 export function buildSetBankCommand(bank: number): Uint8Array {
   return buildMessage(CMD_SET_BANK, new Uint8Array([bank & 0x03]))
+}
+
+/**
+ * Build a freeze track command
+ */
+export function buildFreezeTrackCommand(trackId: number): Uint8Array {
+  return buildMessage(CMD_FREEZE_TRACK, new Uint8Array([trackId]))
+}
+
+/**
+ * Build an unfreeze track command
+ */
+export function buildUnfreezeTrackCommand(trackId: number): Uint8Array {
+  return buildMessage(CMD_UNFREEZE_TRACK, new Uint8Array([trackId]))
+}
+
+/**
+ * Build a request pattern command
+ * @param trackId Optional - request specific track, or omit for all tracks
+ */
+export function buildRequestPatternCommand(trackId?: number): Uint8Array {
+  if (trackId !== undefined) {
+    return buildMessage(CMD_REQ_PATTERN, new Uint8Array([trackId]))
+  }
+  return buildMessage(CMD_REQ_PATTERN)
 }
 
 /**
@@ -435,6 +521,85 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
         }
       }
       break
+
+    case MSG_TRACK_STATE:
+      // 4 synth tracks × [id:1][status:1][frozen_slot:1][source:1]
+      if (payload.length >= 16) {
+        const tracks: TrackStateInfo[] = []
+        for (let i = 0; i < 4; i++) {
+          const base = i * 4
+          tracks.push({
+            id: payload[base],
+            status: payload[base + 1] as TrackStatus,
+            frozenSlot: payload[base + 2],
+            sourceTrack: payload[base + 3],
+          })
+        }
+        return {
+          type: MSG_TRACK_STATE,
+          tracks,
+        }
+      }
+      break
+
+    case MSG_PATTERN_DUMP:
+      // [track_id:1][offset:2][count:2][events:7*count]
+      if (payload.length >= 5) {
+        const trackId = payload[0]
+        const offset = payload[1] | (payload[2] << 8)
+        const count = payload[3] | (payload[4] << 8)
+        const events: PatternEvent[] = []
+
+        for (let i = 0; i < count; i++) {
+          const base = 5 + i * 7
+          if (base + 7 <= payload.length) {
+            events.push({
+              tick:
+                payload[base] |
+                (payload[base + 1] << 8) |
+                (payload[base + 2] << 16) |
+                (payload[base + 3] << 24),
+              status: payload[base + 4],
+              data1: payload[base + 5],
+              data2: payload[base + 6],
+            })
+          }
+        }
+
+        return {
+          type: MSG_PATTERN_DUMP,
+          trackId,
+          offset,
+          count,
+          events,
+        }
+      }
+      break
+
+    case MSG_PATTERN_CLEAR:
+      if (payload.length >= 1) {
+        return {
+          type: MSG_PATTERN_CLEAR,
+          trackId: payload[0],
+        }
+      }
+      break
+
+    case MSG_RESOURCES:
+      // [mem_used:4][mem_total:4][cpu:1]
+      if (payload.length >= 9) {
+        const memoryUsed =
+          payload[0] | (payload[1] << 8) | (payload[2] << 16) | (payload[3] << 24)
+        const memoryTotal =
+          payload[4] | (payload[5] << 8) | (payload[6] << 16) | (payload[7] << 24)
+        return {
+          type: MSG_RESOURCES,
+          memoryUsed: memoryUsed >>> 0,  // Ensure unsigned
+          memoryTotal: memoryTotal >>> 0,
+          cpuLoad: payload[8],
+        }
+      }
+      break
   }
 
   return null
@@ -570,6 +735,14 @@ export function getMessageTypeName(type: number): string {
       return 'FADER_STATE'
     case MSG_MIXER_STATE:
       return 'MIXER_STATE'
+    case MSG_TRACK_STATE:
+      return 'TRACK_STATE'
+    case MSG_PATTERN_DUMP:
+      return 'PATTERN_DUMP'
+    case MSG_PATTERN_CLEAR:
+      return 'PATTERN_CLEAR'
+    case MSG_RESOURCES:
+      return 'RESOURCES'
     case MSG_DEBUG:
       return 'DEBUG'
     default:

@@ -71,10 +71,8 @@ volatile uint32_t debug_noteon_queued = 0;
 volatile uint32_t debug_noteoff_queued = 0;
 volatile uint32_t debug_queue_full = 0;
 
-// Flag to send transport state update
+// Flags set from audio callback, consumed in main loop (audio thread -> main thread)
 static volatile bool send_transport_update = false;
-
-// Flag to send track state update (after freeze completes)
 static volatile bool send_track_state_update = false;
 
 // Staggered pattern dump state (to avoid USB buffer overflow)
@@ -82,7 +80,7 @@ static uint8_t pending_dump_track = 0xFF;  // 0xFF = no pending dump
 static uint32_t last_dump_time = 0;
 constexpr uint32_t DUMP_INTERVAL_MS = 10;  // 10ms between track dumps
 
-// Voice count tracking for MSG_VOICES
+// Voice count tracking for MSG_VOICES (audio thread -> main thread)
 static volatile uint8_t last_synth_count = 0;
 static volatile uint8_t last_drum_count = 0;
 static volatile bool send_voices_update = false;
@@ -312,6 +310,8 @@ void AudioCallback(AudioHandle::InputBuffer  in,
                    size_t                    size)
 {
     cpu_meter.OnBlockStart();
+    // Update controls once per audio block (audio thread only).
+    hw.ProcessAllControls();
 
     // Check if currently rendering a freeze
     bool is_rendering = (audio_track_manager.GetRenderTarget() != AudioTrack::NO_SLOT);
@@ -394,7 +394,7 @@ void AudioCallback(AudioHandle::InputBuffer  in,
         send_transport_update = true;
     }
 
-    // Check if voice counts changed
+    // Check if voice counts changed (flag for main loop)
     uint8_t synth_count = synth.GetActiveCount();
     uint8_t drum_count = sampler.GetActiveCount();
     if(synth_count != last_synth_count || drum_count != last_drum_count)
@@ -1041,8 +1041,7 @@ int main(void)
     {
         uint32_t now = System::GetNow();
 
-        // Process Pod controls (buttons, encoder)
-        hw.ProcessAllControls();
+        // NOTE: Controls are updated in the audio callback to keep latency low.
 
         // Button 1: Play/Stop toggle
         if(hw.button1.RisingEdge())

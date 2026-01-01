@@ -432,7 +432,8 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
 
     case MSG_SYNTH_STATE:
       // Parse synth state - must match SendSynthState() order in GroovyDaisy.cpp
-      if (payload.length >= 60) {
+      // Payload is 68 bytes in the current firmware layout.
+      if (payload.length >= 68) {
         let idx = 0
 
         const params: SynthParams = {

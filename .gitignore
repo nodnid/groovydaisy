@@ -4,3 +4,4 @@ companion/dist/
 .DS_Store
 test/run_tests
 test/*.o
+companion/debug.log

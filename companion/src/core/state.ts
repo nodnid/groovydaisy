@@ -21,6 +21,9 @@ import {
   MSG_METRO,
   MSG_ERROR,
   MSG_ENGINE_MIX,
+  MSG_TRACK,
+  MSG_TRACK_GONE,
+  MSG_CAPTURE,
   type ParsedMessage,
   type SynthParams,
   getDefaultSynthParams,
@@ -54,6 +57,23 @@ export interface DeviceError {
   atMs: number
 }
 
+export interface TrackState {
+  slot: number
+  gen: number
+  kind: number // KIND_MIDI_DRUM | KIND_MIDI_SYNTH | KIND_AUDIO
+  lengthBars: number
+  createdSeq: number
+}
+
+export interface CaptureFlash {
+  status: number // CAP_*
+  source: number
+  bars: number
+  slot: number
+  reason: number
+  atMs: number
+}
+
 export interface DeviceState {
   protoVer: number | null // null until MSG_HELLO seen
   transport: TransportState
@@ -67,6 +87,8 @@ export interface DeviceState {
   strips: Record<number, StripState>
   metro: { on: boolean; level: number }
   lastError: DeviceError | null
+  tracks: Record<number, TrackState> // keyed by slot
+  captureFlash: CaptureFlash | null
 }
 
 function defaultStrip(level = 101): StripState {
@@ -92,6 +114,8 @@ export function getInitialDeviceState(): DeviceState {
     },
     metro: { on: true, level: 64 },
     lastError: null,
+    tracks: {},
+    captureFlash: null,
   }
 }
 
@@ -99,6 +123,7 @@ export type DeviceAction =
   | { kind: 'message'; msg: ParsedMessage; nowMs: number }
   | { kind: 'reset' }
   | { kind: 'clearError' }
+  | { kind: 'clearCaptureFlash' }
 
 export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceState {
   if (action.kind === 'reset') {
@@ -106,6 +131,9 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
   }
   if (action.kind === 'clearError') {
     return { ...state, lastError: null }
+  }
+  if (action.kind === 'clearCaptureFlash') {
+    return { ...state, captureFlash: null }
   }
 
   const { msg, nowMs } = action
@@ -161,6 +189,54 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
       return {
         ...state,
         lastError: { code: msg.code, context: msg.context, atMs: nowMs },
+      }
+
+    case MSG_TRACK: {
+      // Upsert the track and seed its mixer strip from the same message
+      const track: TrackState = {
+        slot: msg.slot,
+        gen: msg.gen,
+        kind: msg.kind,
+        lengthBars: msg.lengthBars,
+        createdSeq: msg.createdSeq,
+      }
+      return {
+        ...state,
+        tracks: { ...state.tracks, [msg.slot]: track },
+        strips: {
+          ...state.strips,
+          [msg.slot]: {
+            level: msg.level,
+            pan: msg.pan,
+            mute: msg.mute,
+            sendRev: msg.sendRev,
+            sendDly: msg.sendDly,
+          },
+        },
+      }
+    }
+
+    case MSG_TRACK_GONE: {
+      const existing = state.tracks[msg.slot]
+      if (!existing || existing.gen !== msg.gen) {
+        return state // stale reference: a different generation lives there
+      }
+      const tracks = { ...state.tracks }
+      delete tracks[msg.slot]
+      return { ...state, tracks }
+    }
+
+    case MSG_CAPTURE:
+      return {
+        ...state,
+        captureFlash: {
+          status: msg.status,
+          source: msg.source,
+          bars: msg.bars,
+          slot: msg.slot,
+          reason: msg.reason,
+          atMs: nowMs,
+        },
       }
 
     case MSG_ENGINE_MIX:

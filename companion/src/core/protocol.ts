@@ -26,6 +26,9 @@ export const MSG_METRO = 0x0a
 export const MSG_ERROR = 0x0b
 export const MSG_CC_STATE = 0x0c
 export const MSG_ENGINE_MIX = 0x0d
+export const MSG_TRACK = 0x10
+export const MSG_TRACK_GONE = 0x11
+export const MSG_CAPTURE = 0x12
 export const MSG_DEBUG = 0xff
 
 // Message types: Companion -> Daisy
@@ -41,6 +44,33 @@ export const CMD_MIXER = 0x88
 export const CMD_METRO = 0x89
 export const CMD_MONITOR = 0x8a
 export const CMD_REQ_STATE = 0x90
+export const CMD_CAPTURE = 0xa0
+export const CMD_UNDO = 0xa1
+export const CMD_TRACK_DELETE = 0xa2
+export const CMD_SRC_LEN = 0xa3
+
+// Capture sources
+export const SRC_PADS = 0
+export const SRC_KEYS = 1
+export const SRC_GUITAR = 2
+export const SRC_ANY = 0xff
+
+export const SOURCE_NAMES: Record<number, string> = {
+  [SRC_PADS]: 'Pads',
+  [SRC_KEYS]: 'Keys',
+  [SRC_GUITAR]: 'Guitar',
+  [SRC_ANY]: 'Any',
+}
+
+// MSG_CAPTURE status
+export const CAP_PENDING = 0
+export const CAP_COMMITTED = 1
+export const CAP_REFUSED = 2
+
+// Track kinds (mirrors track.h)
+export const KIND_MIDI_DRUM = 0
+export const KIND_MIDI_SYNTH = 1
+export const KIND_AUDIO = 2
 
 // MSG_ERROR codes (mirrors protocol.h)
 export const ERR_TEMPO_LOCKED = 1
@@ -49,12 +79,17 @@ export const ERR_POOL_FULL = 3
 export const ERR_KIND_CAP = 4
 export const ERR_BUSY = 5
 
+export const ERR_NO_HISTORY = 6
+export const ERR_EMPTY = 7
+
 export const ERROR_NAMES: Record<number, string> = {
   [ERR_TEMPO_LOCKED]: 'Tempo is locked (audio loops exist)',
   [ERR_NOT_PLAYING]: 'Transport is not playing',
   [ERR_POOL_FULL]: 'Audio memory is full',
   [ERR_KIND_CAP]: 'Track limit reached',
   [ERR_BUSY]: 'Capture in progress',
+  [ERR_NO_HISTORY]: 'Not enough bars played yet',
+  [ERR_EMPTY]: 'Nothing was played in that window',
 }
 
 // CMD_MIXER / MSG_MIXER field ids
@@ -179,6 +214,37 @@ export interface EngineMixMessage {
   masterOut: number
 }
 
+export interface TrackMessage {
+  type: typeof MSG_TRACK
+  slot: number
+  gen: number
+  kind: number // KIND_MIDI_DRUM | KIND_MIDI_SYNTH | KIND_AUDIO
+  lengthBars: number
+  mute: boolean
+  level: number
+  pan: number
+  sendRev: number
+  sendDly: number
+  createdSeq: number
+}
+
+export interface TrackGoneMessage {
+  type: typeof MSG_TRACK_GONE
+  slot: number
+  gen: number
+  reason: number // 0 = deleted, 1 = undo
+}
+
+export interface CaptureMessage {
+  type: typeof MSG_CAPTURE
+  status: number // CAP_PENDING | CAP_COMMITTED | CAP_REFUSED
+  source: number
+  bars: number
+  slot: number
+  gen: number
+  reason: number // ERR_* when refused
+}
+
 // Synth parameters - mirrors SynthParams struct in synth.h
 export interface SynthParams {
   osc1Wave: number
@@ -227,6 +293,9 @@ export type ParsedMessage =
   | MetroMessage
   | ErrorMessage
   | EngineMixMessage
+  | TrackMessage
+  | TrackGoneMessage
+  | CaptureMessage
 
 // Parser state
 enum ParserState {
@@ -327,6 +396,23 @@ export function buildMetroCommand(on: boolean, level: number): Uint8Array {
 
 export function buildMonitorCommand(on: boolean): Uint8Array {
   return buildMessage(CMD_MONITOR, new Uint8Array([on ? 1 : 0]))
+}
+
+/** bars = 0 means "use the source's preset length" */
+export function buildCaptureCommand(source: number, bars = 0): Uint8Array {
+  return buildMessage(CMD_CAPTURE, new Uint8Array([source, bars]))
+}
+
+export function buildUndoCommand(): Uint8Array {
+  return buildMessage(CMD_UNDO)
+}
+
+export function buildTrackDeleteCommand(slot: number, gen: number): Uint8Array {
+  return buildMessage(CMD_TRACK_DELETE, new Uint8Array([slot, gen]))
+}
+
+export function buildSrcLenCommand(source: number, bars: number): Uint8Array {
+  return buildMessage(CMD_SRC_LEN, new Uint8Array([source, bars]))
 }
 
 /**
@@ -531,6 +617,49 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
       }
       break
 
+    case MSG_TRACK:
+      if (payload.length >= 11) {
+        return {
+          type: MSG_TRACK,
+          slot: payload[0],
+          gen: payload[1],
+          kind: payload[2],
+          lengthBars: payload[3],
+          mute: payload[4] !== 0,
+          level: payload[5],
+          pan: payload[6],
+          sendRev: payload[7],
+          sendDly: payload[8],
+          createdSeq: payload[9] | (payload[10] << 8),
+        }
+      }
+      break
+
+    case MSG_TRACK_GONE:
+      if (payload.length >= 3) {
+        return {
+          type: MSG_TRACK_GONE,
+          slot: payload[0],
+          gen: payload[1],
+          reason: payload[2],
+        }
+      }
+      break
+
+    case MSG_CAPTURE:
+      if (payload.length >= 6) {
+        return {
+          type: MSG_CAPTURE,
+          status: payload[0],
+          source: payload[1],
+          bars: payload[2],
+          slot: payload[3],
+          gen: payload[4],
+          reason: payload[5],
+        }
+      }
+      break
+
     case MSG_ENGINE_MIX:
       // [drum_levels:8][drum_pans:8][drum_master][synth_level][synth_pan][synth_master][master_out]
       if (payload.length >= 21) {
@@ -691,6 +820,12 @@ export function getMessageTypeName(type: number): string {
       return 'CC_STATE'
     case MSG_ENGINE_MIX:
       return 'ENGINE_MIX'
+    case MSG_TRACK:
+      return 'TRACK'
+    case MSG_TRACK_GONE:
+      return 'TRACK_GONE'
+    case MSG_CAPTURE:
+      return 'CAPTURE'
     case MSG_DEBUG:
       return 'DEBUG'
     default:

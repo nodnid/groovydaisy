@@ -81,6 +81,15 @@ constexpr uint8_t MSG_CC_STATE    = 0x0C;
 // master + master out), layout identical to v1 MSG_MIXER_STATE. Sent
 // throttled on change and in the snapshot.
 constexpr uint8_t MSG_ENGINE_MIX  = 0x0D;
+
+// Track/capture family (Phase 2)
+// MSG_TRACK: [slot][gen][kind][len_bars][mute][level][pan][send_rev]
+//            [send_dly][created_seq:2] — sent on create and in snapshot
+constexpr uint8_t MSG_TRACK       = 0x10;
+// MSG_TRACK_GONE: [slot][gen][reason: 0=deleted, 1=undo]
+constexpr uint8_t MSG_TRACK_GONE  = 0x11;
+// MSG_CAPTURE: [status][source][bars][slot][gen][reason]
+constexpr uint8_t MSG_CAPTURE     = 0x12;
 constexpr uint8_t MSG_DEBUG       = 0xFF;
 
 // MSG_MIXER/CMD_MIXER strip id for the master bus
@@ -100,12 +109,31 @@ constexpr uint8_t CMD_METRO       = 0x89;
 constexpr uint8_t CMD_MONITOR     = 0x8A;
 constexpr uint8_t CMD_REQ_STATE   = 0x90;
 
+// Track/capture commands (Phase 2)
+constexpr uint8_t CMD_CAPTURE      = 0xA0; // [source (SRC_ANY=all active)][bars (0=source preset)]
+constexpr uint8_t CMD_UNDO         = 0xA1; // [] — delete newest capture
+constexpr uint8_t CMD_TRACK_DELETE = 0xA2; // [slot][gen] — hold-gesture in UIs
+constexpr uint8_t CMD_SRC_LEN      = 0xA3; // [source][bars 1/2/4/8]
+
+// Capture sources
+constexpr uint8_t SRC_PADS   = 0;
+constexpr uint8_t SRC_KEYS   = 1;
+constexpr uint8_t SRC_GUITAR = 2; // Phase 3
+constexpr uint8_t SRC_ANY    = 0xFF;
+
+// MSG_CAPTURE status
+constexpr uint8_t CAP_PENDING   = 0;
+constexpr uint8_t CAP_COMMITTED = 1;
+constexpr uint8_t CAP_REFUSED   = 2;
+
 // MSG_ERROR codes
 constexpr uint8_t ERR_TEMPO_LOCKED = 1;
 constexpr uint8_t ERR_NOT_PLAYING  = 2;
 constexpr uint8_t ERR_POOL_FULL    = 3; // Phase 3
-constexpr uint8_t ERR_KIND_CAP     = 4; // Phase 2
-constexpr uint8_t ERR_BUSY         = 5; // Phase 3 (copy in flight)
+constexpr uint8_t ERR_KIND_CAP     = 4;
+constexpr uint8_t ERR_BUSY         = 5; // ring lapped / copy in flight
+constexpr uint8_t ERR_NO_HISTORY   = 6; // not enough bars elapsed yet
+constexpr uint8_t ERR_EMPTY        = 7; // nothing played in the window
 
 // CMD_MIXER / MSG_MIXER field ids
 constexpr uint8_t MIX_FIELD_LEVEL    = 0;

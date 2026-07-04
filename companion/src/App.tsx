@@ -4,6 +4,7 @@ import TransportBar from './components/TransportBar'
 import MidiMonitor, { type MidiLogEntry } from './components/MidiMonitor'
 import EngineState from './components/EngineState'
 import LiveMixer from './components/LiveMixer'
+import TrackList from './components/TrackList'
 import RawLog from './components/RawLog'
 import SynthPanel from './components/SynthPanel'
 import PresetManager from './components/PresetManager'
@@ -31,6 +32,10 @@ import {
   buildMixerCommand,
   buildMetroCommand,
   buildMonitorCommand,
+  buildCaptureCommand,
+  buildUndoCommand,
+  buildTrackDeleteCommand,
+  buildSrcLenCommand,
   CMD_PLAY,
   CMD_STOP,
   CMD_REWIND,
@@ -77,6 +82,14 @@ function App() {
       return () => clearTimeout(t)
     }
   }, [device.lastError])
+
+  // Capture flashes fade too (pending flashes stay until resolved)
+  useEffect(() => {
+    if (device.captureFlash && device.captureFlash.status !== 0 /* pending */) {
+      const t = setTimeout(() => dispatch({ kind: 'clearCaptureFlash' }), 4000)
+      return () => clearTimeout(t)
+    }
+  }, [device.captureFlash])
 
   const addLog = useCallback((direction: '>' | '<', data: string) => {
     setLogs((prev) => {
@@ -178,6 +191,24 @@ function App() {
       setMonitorEnabled(on)
       send(buildMonitorCommand(on))
     },
+    [send]
+  )
+  const handleCapture = useCallback(
+    (source: number, bars: number) => send(buildCaptureCommand(source, bars)),
+    [send]
+  )
+  const handleUndo = useCallback(() => send(buildUndoCommand()), [send])
+  const handleTrackDelete = useCallback(
+    (slot: number, gen: number) => send(buildTrackDeleteCommand(slot, gen)),
+    [send]
+  )
+  const handleTrackMute = useCallback(
+    (slot: number, mute: boolean) =>
+      send(buildMixerCommand(slot, MIX_FIELD_MUTE, mute ? 1 : 0)),
+    [send]
+  )
+  const handleSrcLen = useCallback(
+    (source: number, bars: number) => send(buildSrcLenCommand(source, bars)),
     [send]
   )
 
@@ -303,6 +334,21 @@ function App() {
 
       {/* Main Content */}
       <main className="flex-1 p-4 space-y-4 overflow-y-auto">
+        {/* Loop Tracks */}
+        <TrackList
+          tracks={device.tracks}
+          strips={device.strips}
+          transport={device.transport}
+          sync={device.sync}
+          captureFlash={device.captureFlash}
+          onCapture={handleCapture}
+          onUndo={handleUndo}
+          onDelete={handleTrackDelete}
+          onMute={handleTrackMute}
+          onSrcLen={handleSrcLen}
+          connected={connected}
+        />
+
         {/* Live Mixer */}
         <LiveMixer
           strips={device.strips}

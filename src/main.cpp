@@ -29,6 +29,9 @@
 #include "synth.h"
 #include "cc_map.h"
 #include "midi_router.h"
+#include "track.h"
+#include "capture.h"
+#include "seq_track.h"
 #include "ui_link.h"
 #include "samples/drums.h"
 #include "util/CpuLoadMeter.h"
@@ -49,6 +52,14 @@ MidiRouter::Router router;
 CCMap::Engine      cc_engine;
 UiLink::Publisher  ui;
 CpuLoadMeter       cpu_meter;
+
+// Phase 2: track registry + retrospective MIDI capture
+Track::Registry  registry;
+Capture::MidiRing pads_ring;
+Capture::MidiRing keys_ring;
+Capture::Pending  pending_cap[2];          // indexed by SRC_PADS / SRC_KEYS
+bool              pending_silent[2];        // SRC_ANY captures skip ERR_EMPTY
+uint8_t           src_len_preset[3] = {4, 4, 4}; // bars per source
 
 // ---------------------------------------------------------------------------
 // SDRAM regions — the ENTIRE 64 MB budget is declared here (SPEC.md memory
@@ -88,6 +99,31 @@ std::atomic<uint8_t> synth_voices_active{0};
 std::atomic<uint8_t> drum_voices_active{0};
 
 // ---------------------------------------------------------------------------
+// Capture recording + sequenced playback glue (audio-callback context)
+// ---------------------------------------------------------------------------
+
+// Router record hook: every live note lands in its source's rolling ring.
+// Only while the clock runs — events stamped with a frozen tick would
+// pollute later capture windows.
+void RecordToRings(const MidiRouter::Event& e, uint32_t tick)
+{
+    if(!clk.Playing())
+        return;
+    uint8_t ch = e.status & 0x0F;
+    if(ch == MidiRouter::DRUM_CHANNEL)
+        pads_ring.Push(tick, e.status, e.d1, e.d2);
+    else if(ch == MidiRouter::SYNTH_CHANNEL)
+        keys_ring.Push(tick, e.status, e.d1, e.d2);
+}
+
+// SeqTrack dispatch -> the same router path as live input
+void SeqDispatch(uint8_t status, uint8_t d1, uint8_t d2, float vel_scale)
+{
+    MidiRouter::Event e{status, d1, d2};
+    router.Dispatch(e, MidiRouter::Source::Playback, clk.NowTick(), vel_scale);
+}
+
+// ---------------------------------------------------------------------------
 // Audio callback
 // ---------------------------------------------------------------------------
 
@@ -120,6 +156,7 @@ void AudioCallback(AudioHandle::InputBuffer  in,
             {
                 metro.TriggerBeat(Clock::Engine::OnBar(t));
             }
+            SeqTrack::ProcessTick(registry, mixer, t, SeqDispatch);
             tick_i++;
         }
 
@@ -258,6 +295,7 @@ void SendFaderState()
 }
 
 void SendEngineMix();
+void SendTrack(int slot);
 
 /** Full snapshot: everything the companion needs to cold-join. */
 void SendSnapshot()
@@ -277,6 +315,13 @@ void SendSnapshot()
              Mixer::GainToCc(mixer.Get(Mixer::STRIP_METRO).gain));
     SendEngineMix();
     SendSynthState();
+    for(int i = 0; i < Track::MAX_TRACKS; i++)
+    {
+        if(registry.Get(i).active.load())
+        {
+            SendTrack(i);
+        }
+    }
 }
 
 // Layout identical to v1 MSG_MIXER_STATE (companion parsing unchanged):
@@ -305,6 +350,175 @@ void SendEngineMix()
 // loop flushes at most every 100 ms (don't spam CDC)
 static bool synth_state_dirty = false;
 static bool engine_mix_dirty  = false;
+
+// ---------------------------------------------------------------------------
+// Track / capture (main-loop context)
+// ---------------------------------------------------------------------------
+
+void SendTrack(int slot)
+{
+    const Track::Slot&  s  = registry.Get(slot);
+    const Mixer::Strip& st = mixer.Get(slot);
+    uint8_t p[11];
+    p[0]  = (uint8_t)slot;
+    p[1]  = s.gen;
+    p[2]  = (uint8_t)s.kind;
+    p[3]  = s.length_bars;
+    p[4]  = st.mute ? 1 : 0;
+    p[5]  = Mixer::GainToCc(st.gain);
+    p[6]  = Mixer::PanToCc(st.pan);
+    p[7]  = Mixer::GainToCc(st.send_rev);
+    p[8]  = Mixer::GainToCc(st.send_dly);
+    p[9]  = s.created_seq & 0xFF;
+    p[10] = (s.created_seq >> 8) & 0xFF;
+    ui.Send(Protocol::MSG_TRACK, p, 11);
+}
+
+void SendTrackGone(uint8_t slot, uint8_t gen, uint8_t reason)
+{
+    uint8_t p[3] = {slot, gen, reason};
+    ui.Send(Protocol::MSG_TRACK_GONE, p, 3);
+}
+
+void SendCaptureMsg(uint8_t status, uint8_t source, uint8_t bars,
+                    uint8_t slot, uint8_t gen, uint8_t reason)
+{
+    uint8_t p[6] = {status, source, bars, slot, gen, reason};
+    ui.Send(Protocol::MSG_CAPTURE, p, 6);
+}
+
+static uint8_t SnapBars(uint8_t bars)
+{
+    // Loop lengths are 1/2/4/8 (SPEC.md track model)
+    if(bars <= 1) return 1;
+    if(bars <= 2) return 2;
+    if(bars <= 5) return 4;
+    return 8;
+}
+
+void CommitCapture(uint8_t source, uint8_t bars, uint32_t end_tick,
+                   bool silent_if_empty)
+{
+    Capture::MidiRing& ring = source == Protocol::SRC_PADS ? pads_ring
+                                                           : keys_ring;
+    Track::Kind kind = source == Protocol::SRC_PADS ? Track::Kind::MidiDrum
+                                                    : Track::Kind::MidiSynth;
+
+    int slot = registry.Create(kind, bars);
+    if(slot < 0)
+    {
+        SendCaptureMsg(Protocol::CAP_REFUSED, source, bars, 0, 0,
+                       Protocol::ERR_KIND_CAP);
+        ui.Error(Protocol::ERR_KIND_CAP, source);
+        return;
+    }
+
+    Track::Slot& s = registry.Get(slot);
+    auto res = Capture::ExtractWindow(ring, end_tick, bars, s.events,
+                                      Track::MAX_EVENTS, s.event_count);
+    if(res == Capture::ExtractResult::Empty)
+    {
+        registry.Abort(slot);
+        if(!silent_if_empty)
+        {
+            SendCaptureMsg(Protocol::CAP_REFUSED, source, bars, 0, 0,
+                           Protocol::ERR_EMPTY);
+        }
+        return;
+    }
+    if(res == Capture::ExtractResult::Overrun)
+    {
+        registry.Abort(slot);
+        SendCaptureMsg(Protocol::CAP_REFUSED, source, bars, 0, 0,
+                       Protocol::ERR_BUSY);
+        return;
+    }
+
+    mixer.Get(slot).Reset(0.8f);
+    registry.Activate(slot);
+    SendTrack(slot);
+    SendCaptureMsg(Protocol::CAP_COMMITTED, source, bars, (uint8_t)slot,
+                   s.gen, 0);
+}
+
+void RequestCapture(uint8_t source, uint8_t bars_arg)
+{
+    if(!clk.Playing())
+    {
+        ui.Error(Protocol::ERR_NOT_PLAYING, source);
+        SendCaptureMsg(Protocol::CAP_REFUSED, source, 0, 0, 0,
+                       Protocol::ERR_NOT_PLAYING);
+        return;
+    }
+
+    bool any = source == Protocol::SRC_ANY;
+    for(uint8_t src = Protocol::SRC_PADS; src <= Protocol::SRC_KEYS; src++)
+    {
+        if(!any && src != source)
+            continue;
+
+        uint8_t bars =
+            SnapBars(bars_arg != 0 ? bars_arg : src_len_preset[src]);
+        uint32_t end = Capture::WindowEndTick(clk.NowTick());
+
+        if(end < (uint32_t)bars * Clock::TICKS_PER_BAR)
+        {
+            if(!any)
+            {
+                SendCaptureMsg(Protocol::CAP_REFUSED, src, bars, 0, 0,
+                               Protocol::ERR_NO_HISTORY);
+                ui.Error(Protocol::ERR_NO_HISTORY, src);
+            }
+            continue;
+        }
+
+        if(end > clk.NowTick())
+        {
+            pending_cap[src].armed    = true;
+            pending_cap[src].bars     = bars;
+            pending_cap[src].end_tick = end;
+            pending_silent[src]       = any;
+            SendCaptureMsg(Protocol::CAP_PENDING, src, bars, 0, 0, 0);
+        }
+        else
+        {
+            CommitCapture(src, bars, end, any);
+        }
+    }
+}
+
+/** Main-loop poll: fire pending captures when the clock crosses them. */
+void PollPendingCaptures()
+{
+    for(uint8_t src = 0; src < 2; src++)
+    {
+        if(!pending_cap[src].armed)
+            continue;
+        if(!clk.Playing())
+        {
+            pending_cap[src].armed = false; // stopped while pending
+            continue;
+        }
+        if(clk.NowTick() >= pending_cap[src].end_tick)
+        {
+            pending_cap[src].armed = false;
+            CommitCapture(src, pending_cap[src].bars,
+                          pending_cap[src].end_tick, pending_silent[src]);
+        }
+    }
+}
+
+void DoUndo()
+{
+    int slot = registry.NewestActive();
+    if(slot < 0)
+    {
+        return; // nothing to undo — silence, not an error
+    }
+    uint8_t gen = registry.Get(slot).gen;
+    registry.Destroy(slot);
+    SendTrackGone((uint8_t)slot, gen, 1);
+}
 
 // ---------------------------------------------------------------------------
 // CC -> parameter application
@@ -418,6 +632,12 @@ void ApplyParamTarget(CCMap::ParamTarget target, uint8_t cc_value)
         case TARGET_METRO_LEVEL:
             mixer.Get(Mixer::STRIP_METRO).gain = CCToNorm(cc_value);
             ui.Metro(metro.Enabled(), cc_value);
+            break;
+        case TARGET_CAPTURE_LEN_PADS:
+            src_len_preset[Protocol::SRC_PADS] = 1 << (cc_value / 32);
+            break;
+        case TARGET_CAPTURE_LEN_KEYS:
+            src_len_preset[Protocol::SRC_KEYS] = 1 << (cc_value / 32);
             break;
         case TARGET_MASTER_OUTPUT:
             mixer.SetMaster(CCToNorm(cc_value));
@@ -587,6 +807,40 @@ void ProcessCommand()
             SendSnapshot();
             break;
 
+        case Protocol::CMD_CAPTURE:
+            if(parser.payload_len >= 2)
+            {
+                RequestCapture(parser.payload[0], parser.payload[1]);
+            }
+            break;
+
+        case Protocol::CMD_UNDO:
+            DoUndo();
+            break;
+
+        case Protocol::CMD_TRACK_DELETE:
+            if(parser.payload_len >= 2)
+            {
+                uint8_t slot = parser.payload[0];
+                uint8_t gen  = parser.payload[1];
+                if(slot < Track::MAX_TRACKS
+                   && registry.Get(slot).active.load()
+                   && registry.Get(slot).gen == gen)
+                {
+                    registry.Destroy(slot);
+                    SendTrackGone(slot, gen, 0);
+                }
+            }
+            break;
+
+        case Protocol::CMD_SRC_LEN:
+            if(parser.payload_len >= 2 && parser.payload[0] < 3)
+            {
+                src_len_preset[parser.payload[0]]
+                    = SnapBars(parser.payload[1]);
+            }
+            break;
+
         default:
             break;
     }
@@ -628,6 +882,10 @@ int main(void)
     sample_bank.Generate();
     synth.Init(hw.AudioSampleRate());
     router.Init(&sampler, &synth);
+    router.SetRecordHook(RecordToRings);
+    registry.Init();
+    pads_ring.Reset();
+    keys_ring.Reset();
     cc_engine.Init();
     ui.Init(UsbSendRaw);
     cpu_meter.Init(hw.AudioSampleRate(), hw.AudioBlockSize());
@@ -687,12 +945,10 @@ int main(void)
             SendTransport();
         }
 
-        // Button 2: metronome toggle (Phase 2 reassigns this to undo)
+        // Button 2: undo — delete the newest capture (SPEC.md undo model)
         if(hw.button2.RisingEdge())
         {
-            metro.SetEnabled(!metro.Enabled());
-            ui.Metro(metro.Enabled(),
-                     Mixer::GainToCc(mixer.Get(Mixer::STRIP_METRO).gain));
+            DoUndo();
         }
 
         // Encoder: turn = tempo, press = tap
@@ -711,6 +967,10 @@ int main(void)
                 ui.Error(Protocol::ERR_TEMPO_LOCKED, 0);
             }
         }
+
+        // Pending retrospective captures fire when the clock crosses
+        // their bar boundary
+        PollPendingCaptures();
 
         // Transport/tempo dirty -> publish
         if(clk.CheckDirty())
@@ -795,6 +1055,16 @@ int main(void)
                 case ControlChange:
                 {
                     ControlChangeEvent cc = e.AsControlChange();
+
+                    // KeyLab Live button (CC 3, main port) = Capture.
+                    // The KeyLab transport buttons only exist on the DAW
+                    // USB port and never reach the DIN input, so Live is
+                    // the one spare main-port button (keylab_essential.md)
+                    if(cc.control_number == 3)
+                    {
+                        RequestCapture(Protocol::SRC_ANY, 0);
+                        break;
+                    }
 
                     uint8_t            out_value;
                     CCMap::ParamTarget target = cc_engine.ProcessCC(

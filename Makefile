@@ -1,6 +1,15 @@
 # Project Name
 TARGET = GroovyDaisy
 
+# Run from QSPI via the Daisy bootloader: the app outgrew the 128KB
+# internal flash at Phase 2 (~96%). One-time setup on a fresh Pod:
+#   1. hold BOOT, press RESET (DFU mode)
+#   2. make program-boot        <- installs the Daisy bootloader
+#   3. press RESET, then within the grace period: make program-dfu
+# From then on, flashing is just: RESET, then make program-dfu while the
+# bootloader LED is breathing.
+APP_TYPE = BOOT_QSPI
+
 # Sources
 CPP_SOURCES = src/main.cpp
 

@@ -122,6 +122,9 @@ enum ParamTarget : uint8_t
     TARGET_GUITAR_LEVEL,
     TARGET_GUITAR_PAN,
     TARGET_METRO_LEVEL,
+    // v2 capture-length presets (bars 1/2/4/8 per source)
+    TARGET_CAPTURE_LEN_PADS,
+    TARGET_CAPTURE_LEN_KEYS,
     TARGET_COUNT
 };
 
@@ -241,8 +244,8 @@ constexpr BankMappings BANK_SAMPLER_MAP = {
         {TARGET_NONE, "Filter"},     // Future: selected drum filter
         {TARGET_NONE, "FltRes"},     // Future: selected drum filter res
         {TARGET_NONE, "Swing"},      // Future: swing amount
-        {TARGET_NONE, "---"},
-        {TARGET_NONE, "---"},
+        {TARGET_CAPTURE_LEN_PADS, "PadLen"},
+        {TARGET_CAPTURE_LEN_KEYS, "KeyLen"},
         {TARGET_NONE, "---"},
         {TARGET_NONE, "---"},
     },

@@ -5,3 +5,4 @@ companion/dist/
 test/run_tests
 test/*.o
 companion/debug.log
+test/*.dSYM/

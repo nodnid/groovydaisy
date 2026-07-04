@@ -1,47 +1,33 @@
-export interface TransportState {
-  playing: boolean
-  recording: boolean
-  bpm: number
-}
-
-export interface Position {
-  bar: number
-  beat: number
-  tick: number
-}
+import type { TransportState } from '../core/state'
 
 interface EngineStateProps {
-  tickCounter?: number
   checksumErrors?: number
-  transport?: TransportState
-  position?: Position
+  transport: TransportState
   synthVoices?: number
+  drumVoices?: number
+  protoVer: number | null
 }
 
 export default function EngineState({
-  tickCounter = 0,
   checksumErrors = 0,
-  transport = { playing: false, recording: false, bpm: 120 },
-  position,
+  transport,
   synthVoices = 0,
+  drumVoices = 0,
+  protoVer,
 }: EngineStateProps) {
-  // Placeholder data for UI preview (will be replaced with real data in later steps)
+  // CPU load arrives with MSG_LEVELS in Phase 5; placeholder until then
   const cpuLoad = 0
-  const pattern = 1
-
-  // Use provided position or calculate from tick counter
-  const PPQN = 96
-  const ticksPerBar = PPQN * 4
-  const bar = position?.bar ?? Math.floor(tickCounter / ticksPerBar) + 1
-  const beat = position?.beat ?? Math.floor((tickCounter % ticksPerBar) / PPQN) + 1
 
   return (
     <div className="bg-groove-panel border border-groove-border rounded-lg">
-      <div className="px-4 py-3 border-b border-groove-border">
+      <div className="px-4 py-3 border-b border-groove-border flex items-center justify-between">
         <h2 className="font-semibold text-groove-text">Engine State</h2>
+        <span className="text-xs text-groove-muted font-mono">
+          {protoVer !== null ? `proto v${protoVer}` : 'no hello yet'}
+        </span>
       </div>
       <div className="p-4 space-y-4">
-        {/* Voice Indicators - Synth only (drums shown via MIDI Monitor) */}
+        {/* Voice Indicators */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-groove-muted">Synth Voices:</span>
@@ -55,6 +41,20 @@ export default function EngineState({
                 />
               ))}
               <span className="ml-2 text-groove-muted">({synthVoices}/6)</span>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-groove-muted">Drum Voices:</span>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div
+                  key={i}
+                  className={`w-3 h-3 rounded-full ${
+                    i < drumVoices ? 'bg-groove-green' : 'bg-groove-border'
+                  }`}
+                />
+              ))}
+              <span className="ml-2 text-groove-muted">({drumVoices}/8)</span>
             </div>
           </div>
         </div>
@@ -83,39 +83,39 @@ export default function EngineState({
         <div className="grid grid-cols-2 gap-4 pt-2 border-t border-groove-border">
           <div>
             <span className="text-groove-muted text-sm">Tempo</span>
-            <p className="text-2xl font-bold text-groove-text">{transport.bpm} BPM</p>
+            <p className="text-2xl font-bold text-groove-text">
+              {Number.isInteger(transport.bpm)
+                ? transport.bpm
+                : transport.bpm.toFixed(1)}{' '}
+              BPM
+              {transport.tempoLocked && (
+                <span className="ml-1 text-sm" title="Tempo locked (audio loops exist)">
+                  🔒
+                </span>
+              )}
+            </p>
           </div>
           <div>
-            <span className="text-groove-muted text-sm">Pattern</span>
-            <p className="text-2xl font-bold text-groove-text">{pattern}/16</p>
-          </div>
-          <div className="col-span-2">
-            <span className="text-groove-muted text-sm">Position</span>
-            <p className="text-xl font-bold text-groove-text">
-              Bar {bar}, Beat {beat}
-              {transport.playing && (
-                <span className="ml-2 text-sm text-groove-green">(playing)</span>
-              )}
-              {transport.recording && (
-                <span className="ml-2 text-sm text-groove-red">(recording)</span>
-              )}
+            <span className="text-groove-muted text-sm">Transport</span>
+            <p
+              className={`text-2xl font-bold ${
+                transport.playing ? 'text-groove-green' : 'text-groove-muted'
+              }`}
+            >
+              {transport.playing ? 'PLAYING' : 'STOPPED'}
             </p>
           </div>
         </div>
 
         {/* Protocol Stats */}
-        <div className="pt-2 border-t border-groove-border">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-groove-muted">Tick Counter:</span>
-            <span className="font-mono text-groove-accent">{tickCounter.toLocaleString()}</span>
-          </div>
-          {checksumErrors > 0 && (
-            <div className="flex items-center justify-between text-sm mt-1">
+        {checksumErrors > 0 && (
+          <div className="pt-2 border-t border-groove-border">
+            <div className="flex items-center justify-between text-sm">
               <span className="text-groove-muted">Checksum Errors:</span>
               <span className="font-mono text-groove-red">{checksumErrors}</span>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -1,41 +1,68 @@
 /**
- * GroovyDaisy Binary Protocol Parser
+ * GroovyDaisy Binary Protocol v2 (mirrors src/protocol.h)
  *
  * Message format: [SYNC][TYPE][LEN_LO][LEN_HI][PAYLOAD...][CHECKSUM]
+ * CHECKSUM: XOR of all bytes from TYPE through PAYLOAD.
  *
- * SYNC:     0xAA - Start of message marker
- * TYPE:     Message type
- * LEN:      16-bit payload length (little-endian)
- * PAYLOAD:  Variable length data
- * CHECKSUM: XOR of all bytes from TYPE through PAYLOAD
+ * v2 is event-driven: the firmware pushes a message when state changes;
+ * nothing streams at frame rate. The playhead is interpolated client-side
+ * from MSG_TRANSPORT bpm + MSG_SYNC (~5 Hz while playing).
  */
 
 // Sync byte
 export const SYNC_BYTE = 0xaa
 
 // Message types: Daisy -> Companion
-export const MSG_TICK = 0x01
+export const MSG_HELLO = 0x01
 export const MSG_TRANSPORT = 0x02
-export const MSG_VOICES = 0x03
-export const MSG_MIDI_IN = 0x04
-export const MSG_CC_STATE = 0x05
+export const MSG_SYNC = 0x03
+export const MSG_VOICES = 0x04
+export const MSG_MIDI_IN = 0x05
 export const MSG_SYNTH_STATE = 0x06
-export const MSG_CC_BANK = 0x07
+export const MSG_BANK = 0x07
 export const MSG_FADER_STATE = 0x08
-export const MSG_MIXER_STATE = 0x09
+export const MSG_MIXER = 0x09
+export const MSG_METRO = 0x0a
+export const MSG_ERROR = 0x0b
+export const MSG_CC_STATE = 0x0c
+export const MSG_ENGINE_MIX = 0x0d
 export const MSG_DEBUG = 0xff
 
 // Message types: Companion -> Daisy
 export const CMD_PLAY = 0x80
 export const CMD_STOP = 0x81
-export const CMD_RECORD = 0x82
+export const CMD_REWIND = 0x82
 export const CMD_TEMPO = 0x83
-export const CMD_PATTERN = 0x84
+export const CMD_TAP = 0x84
 export const CMD_SYNTH_PARAM = 0x85
 export const CMD_LOAD_PRESET = 0x86
 export const CMD_SET_BANK = 0x87
+export const CMD_MIXER = 0x88
+export const CMD_METRO = 0x89
+export const CMD_MONITOR = 0x8a
 export const CMD_REQ_STATE = 0x90
-export const CMD_REQ_SYNTH = 0x92
+
+// MSG_ERROR codes (mirrors protocol.h)
+export const ERR_TEMPO_LOCKED = 1
+export const ERR_NOT_PLAYING = 2
+export const ERR_POOL_FULL = 3
+export const ERR_KIND_CAP = 4
+export const ERR_BUSY = 5
+
+export const ERROR_NAMES: Record<number, string> = {
+  [ERR_TEMPO_LOCKED]: 'Tempo is locked (audio loops exist)',
+  [ERR_NOT_PLAYING]: 'Transport is not playing',
+  [ERR_POOL_FULL]: 'Audio memory is full',
+  [ERR_KIND_CAP]: 'Track limit reached',
+  [ERR_BUSY]: 'Capture in progress',
+}
+
+// CMD_MIXER / MSG_MIXER field ids
+export const MIX_FIELD_LEVEL = 0
+export const MIX_FIELD_PAN = 1
+export const MIX_FIELD_MUTE = 2
+export const MIX_FIELD_SEND_REV = 3
+export const MIX_FIELD_SEND_DLY = 4
 
 // Synth parameter IDs (must match synth.h ParamId enum)
 export enum SynthParamId {
@@ -66,17 +93,27 @@ export const WAVEFORM_NAMES = ['Sine', 'Triangle', 'Saw', 'Square']
 // Factory preset names
 export const FACTORY_PRESETS = ['Init Patch', 'Warm Pad', 'Pluck Lead', 'Bass']
 
+// ---------------------------------------------------------------------------
 // Parsed message types
-export interface TickMessage {
-  type: typeof MSG_TICK
-  tick: number
+// ---------------------------------------------------------------------------
+
+export interface HelloMessage {
+  type: typeof MSG_HELLO
+  protoVer: number
+  fwMajor: number
+  fwMinor: number
 }
 
 export interface TransportMessage {
   type: typeof MSG_TRANSPORT
   playing: boolean
-  recording: boolean
-  bpm: number
+  tempoLocked: boolean
+  bpm: number // float, decoded from bpm_x10
+}
+
+export interface SyncMessage {
+  type: typeof MSG_SYNC
+  tick: number
 }
 
 export interface VoicesMessage {
@@ -97,25 +134,49 @@ export interface DebugMessage {
   text: string
 }
 
-export interface CCBankMessage {
-  type: typeof MSG_CC_BANK
-  bank: number  // 0-3
+export interface BankMessage {
+  type: typeof MSG_BANK
+  bank: number // 0-3
 }
 
 export interface FaderStateMessage {
   type: typeof MSG_FADER_STATE
-  states: Array<{ pickedUp: boolean; needsPickup: boolean }>  // 9 faders
+  states: Array<{ pickedUp: boolean; needsPickup: boolean }> // 9 faders
 }
 
-export interface MixerStateMessage {
-  type: typeof MSG_MIXER_STATE
-  drumLevels: number[]   // 8 values, 0-127
-  drumPans: number[]     // 8 values, 0-127
-  drumMaster: number     // 0-127
-  synthLevel: number     // 0-127
-  synthPan: number       // 0-127
-  synthMaster: number    // 0-127
-  masterOut: number      // 0-127
+/** One mixer strip's full state (v2 strips: guitar/synth/drums/metro/tracks) */
+export interface MixerStripMessage {
+  type: typeof MSG_MIXER
+  strip: number
+  level: number // 0-127
+  pan: number // 0-127, 64 = center
+  mute: boolean
+  sendRev: number // 0-127
+  sendDly: number // 0-127
+}
+
+export interface MetroMessage {
+  type: typeof MSG_METRO
+  on: boolean
+  level: number // 0-127
+}
+
+export interface ErrorMessage {
+  type: typeof MSG_ERROR
+  code: number
+  context: number
+}
+
+/** Engine-internal mix dump; layout identical to v1 MSG_MIXER_STATE */
+export interface EngineMixMessage {
+  type: typeof MSG_ENGINE_MIX
+  drumLevels: number[] // 8 values, 0-127
+  drumPans: number[] // 8 values, 0-127
+  drumMaster: number
+  synthLevel: number
+  synthPan: number
+  synthMaster: number
+  masterOut: number
 }
 
 // Synth parameters - mirrors SynthParams struct in synth.h
@@ -153,15 +214,19 @@ export interface SynthStateMessage {
 }
 
 export type ParsedMessage =
-  | TickMessage
+  | HelloMessage
   | TransportMessage
+  | SyncMessage
   | VoicesMessage
   | MidiInMessage
   | DebugMessage
   | SynthStateMessage
-  | CCBankMessage
+  | BankMessage
   | FaderStateMessage
-  | MixerStateMessage
+  | MixerStripMessage
+  | MetroMessage
+  | ErrorMessage
+  | EngineMixMessage
 
 // Parser state
 enum ParserState {
@@ -204,9 +269,10 @@ function writeFloat(value: number): Uint8Array {
   return buf
 }
 
-/**
- * Build a command message to send to Daisy
- */
+// ---------------------------------------------------------------------------
+// Command builders
+// ---------------------------------------------------------------------------
+
 export function buildMessage(type: number, payload: Uint8Array = new Uint8Array(0)): Uint8Array {
   const msg = new Uint8Array(5 + payload.length)
   msg[0] = SYNC_BYTE
@@ -230,9 +296,12 @@ export function buildMessage(type: number, payload: Uint8Array = new Uint8Array(
   return msg
 }
 
-/**
- * Build a synth parameter command
- */
+/** Tempo command; bpm may be fractional (sent as bpm*10, uint16 LE). */
+export function buildTempoCommand(bpm: number): Uint8Array {
+  const bpmX10 = Math.round(bpm * 10)
+  return buildMessage(CMD_TEMPO, new Uint8Array([bpmX10 & 0xff, (bpmX10 >> 8) & 0xff]))
+}
+
 export function buildSynthParamCommand(paramId: SynthParamId, value: number): Uint8Array {
   const payload = new Uint8Array(5)
   payload[0] = paramId
@@ -240,25 +309,24 @@ export function buildSynthParamCommand(paramId: SynthParamId, value: number): Ui
   return buildMessage(CMD_SYNTH_PARAM, payload)
 }
 
-/**
- * Build a load preset command
- */
 export function buildLoadPresetCommand(presetIndex: number): Uint8Array {
   return buildMessage(CMD_LOAD_PRESET, new Uint8Array([presetIndex]))
 }
 
-/**
- * Build a request synth state command
- */
-export function buildRequestSynthCommand(): Uint8Array {
-  return buildMessage(CMD_REQ_SYNTH)
-}
-
-/**
- * Build a set bank command
- */
 export function buildSetBankCommand(bank: number): Uint8Array {
   return buildMessage(CMD_SET_BANK, new Uint8Array([bank & 0x03]))
+}
+
+export function buildMixerCommand(strip: number, field: number, value: number): Uint8Array {
+  return buildMessage(CMD_MIXER, new Uint8Array([strip, field, value & 0x7f]))
+}
+
+export function buildMetroCommand(on: boolean, level: number): Uint8Array {
+  return buildMessage(CMD_METRO, new Uint8Array([on ? 1 : 0, level & 0x7f]))
+}
+
+export function buildMonitorCommand(on: boolean): Uint8Array {
+  return buildMessage(CMD_MONITOR, new Uint8Array([on ? 1 : 0]))
 }
 
 /**
@@ -298,11 +366,14 @@ export function getDefaultSynthParams(): SynthParams {
  */
 function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
   switch (type) {
-    case MSG_TICK:
-      if (payload.length >= 4) {
-        const tick =
-          payload[0] | (payload[1] << 8) | (payload[2] << 16) | (payload[3] << 24)
-        return { type: MSG_TICK, tick: tick >>> 0 } // >>> 0 ensures unsigned
+    case MSG_HELLO:
+      if (payload.length >= 3) {
+        return {
+          type: MSG_HELLO,
+          protoVer: payload[0],
+          fwMajor: payload[1],
+          fwMinor: payload[2],
+        }
       }
       break
 
@@ -311,9 +382,17 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
         return {
           type: MSG_TRANSPORT,
           playing: payload[0] !== 0,
-          recording: payload[1] !== 0,
-          bpm: payload[2] | (payload[3] << 8),
+          tempoLocked: payload[1] !== 0,
+          bpm: (payload[2] | (payload[3] << 8)) / 10,
         }
+      }
+      break
+
+    case MSG_SYNC:
+      if (payload.length >= 4) {
+        const tick =
+          payload[0] | (payload[1] << 8) | (payload[2] << 16) | (payload[3] << 24)
+        return { type: MSG_SYNC, tick: tick >>> 0 }
       }
       break
 
@@ -345,7 +424,7 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
       }
 
     case MSG_SYNTH_STATE:
-      // Parse synth state - must match SendSynthState() order in GroovyDaisy.cpp
+      // Parse synth state - must match SendSynthState() order in src/main.cpp
       if (payload.length >= 60) {
         let idx = 0
 
@@ -393,10 +472,10 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
       }
       break
 
-    case MSG_CC_BANK:
+    case MSG_BANK:
       if (payload.length >= 1) {
         return {
-          type: MSG_CC_BANK,
+          type: MSG_BANK,
           bank: payload[0],
         }
       }
@@ -418,13 +497,47 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
       }
       break
 
-    case MSG_MIXER_STATE:
-      // [drum_levels:8][drum_pans:8][drum_master:1][synth_level:1][synth_pan:1][synth_master:1][master_out:1]
+    case MSG_MIXER:
+      if (payload.length >= 6) {
+        return {
+          type: MSG_MIXER,
+          strip: payload[0],
+          level: payload[1],
+          pan: payload[2],
+          mute: payload[3] !== 0,
+          sendRev: payload[4],
+          sendDly: payload[5],
+        }
+      }
+      break
+
+    case MSG_METRO:
+      if (payload.length >= 2) {
+        return {
+          type: MSG_METRO,
+          on: payload[0] !== 0,
+          level: payload[1],
+        }
+      }
+      break
+
+    case MSG_ERROR:
+      if (payload.length >= 2) {
+        return {
+          type: MSG_ERROR,
+          code: payload[0],
+          context: payload[1],
+        }
+      }
+      break
+
+    case MSG_ENGINE_MIX:
+      // [drum_levels:8][drum_pans:8][drum_master][synth_level][synth_pan][synth_master][master_out]
       if (payload.length >= 21) {
         const drumLevels = Array.from(payload.slice(0, 8))
         const drumPans = Array.from(payload.slice(8, 16))
         return {
-          type: MSG_MIXER_STATE,
+          type: MSG_ENGINE_MIX,
           drumLevels,
           drumPans,
           drumMaster: payload[16],
@@ -552,24 +665,32 @@ export class ProtocolParser {
  */
 export function getMessageTypeName(type: number): string {
   switch (type) {
-    case MSG_TICK:
-      return 'TICK'
+    case MSG_HELLO:
+      return 'HELLO'
     case MSG_TRANSPORT:
       return 'TRANSPORT'
+    case MSG_SYNC:
+      return 'SYNC'
     case MSG_VOICES:
       return 'VOICES'
     case MSG_MIDI_IN:
       return 'MIDI_IN'
-    case MSG_CC_STATE:
-      return 'CC_STATE'
     case MSG_SYNTH_STATE:
       return 'SYNTH_STATE'
-    case MSG_CC_BANK:
-      return 'CC_BANK'
+    case MSG_BANK:
+      return 'BANK'
     case MSG_FADER_STATE:
       return 'FADER_STATE'
-    case MSG_MIXER_STATE:
-      return 'MIXER_STATE'
+    case MSG_MIXER:
+      return 'MIXER'
+    case MSG_METRO:
+      return 'METRO'
+    case MSG_ERROR:
+      return 'ERROR'
+    case MSG_CC_STATE:
+      return 'CC_STATE'
+    case MSG_ENGINE_MIX:
+      return 'ENGINE_MIX'
     case MSG_DEBUG:
       return 'DEBUG'
     default:

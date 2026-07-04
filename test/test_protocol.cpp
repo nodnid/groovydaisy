@@ -65,7 +65,7 @@ TEST(corrupted_checksum_rejected)
 {
     uint8_t payload[] = {1, 2, 3};
     uint8_t buf[MAX_MESSAGE];
-    size_t  len = BuildMessage(buf, MSG_TICK, payload, sizeof(payload));
+    size_t  len = BuildMessage(buf, MSG_SYNC, payload, sizeof(payload));
     buf[len - 1] ^= 0xFF; // corrupt checksum
 
     Parser p;
@@ -77,7 +77,7 @@ TEST(corrupted_payload_rejected)
 {
     uint8_t payload[] = {1, 2, 3};
     uint8_t buf[MAX_MESSAGE];
-    size_t  len = BuildMessage(buf, MSG_TICK, payload, sizeof(payload));
+    size_t  len = BuildMessage(buf, MSG_SYNC, payload, sizeof(payload));
     buf[5] ^= 0x55; // corrupt a payload byte; checksum now mismatches
 
     Parser p;
@@ -122,7 +122,7 @@ TEST(back_to_back_messages)
 {
     uint8_t a[MAX_MESSAGE], b[MAX_MESSAGE];
     uint8_t pa[] = {0xAA, 0xBB}; // payload containing the sync byte value
-    size_t  la   = BuildMessage(a, MSG_TICK, pa, sizeof(pa));
+    size_t  la   = BuildMessage(a, MSG_SYNC, pa, sizeof(pa));
     size_t  lb   = BuildMessage(b, MSG_TRANSPORT, nullptr, 0);
 
     uint8_t stream[2 * MAX_MESSAGE];

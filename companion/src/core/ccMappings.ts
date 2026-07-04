@@ -66,6 +66,10 @@ export enum ParamTarget {
   DRUM_MASTER_LEVEL,
   // Global
   MASTER_OUTPUT,
+  // v2 live-channel params (mixer strips; matches cc_map.h)
+  GUITAR_LEVEL,
+  GUITAR_PAN,
+  METRO_LEVEL,
 }
 
 // Control mapping entry
@@ -114,7 +118,7 @@ const formatSemi = (v: number) => {
 const BANK_GENERAL_MAPPINGS: BankMappings = {
   bankName: 'General',
   encoders: [
-    { target: ParamTarget.NONE, name: '---' },
+    { target: ParamTarget.GUITAR_PAN, name: 'Gtr Pan', formatValue: formatPan },
     { target: ParamTarget.NONE, name: '---' },
     { target: ParamTarget.NONE, name: '---' },
     { target: ParamTarget.NONE, name: '---' },
@@ -127,8 +131,8 @@ const BANK_GENERAL_MAPPINGS: BankMappings = {
   faders: [
     { target: ParamTarget.DRUM_MASTER_LEVEL, name: 'Drum Mst', formatValue: formatPercent },
     { target: ParamTarget.SYNTH_MASTER_LEVEL, name: 'Synth Mst', formatValue: formatPercent },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.NONE, name: '---' },
+    { target: ParamTarget.GUITAR_LEVEL, name: 'Guitar', formatValue: formatPercent },
+    { target: ParamTarget.METRO_LEVEL, name: 'Metro', formatValue: formatPercent },
     { target: ParamTarget.NONE, name: '---' },
     { target: ParamTarget.NONE, name: '---' },
     { target: ParamTarget.SYNTH_VEL_TO_AMP, name: 'Vel>Amp', formatValue: formatPercent },

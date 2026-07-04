@@ -118,6 +118,10 @@ enum ParamTarget : uint8_t
     TARGET_DRUM_MASTER_LEVEL,
     // Global params
     TARGET_MASTER_OUTPUT,
+    // v2 live-channel params (mixer strips)
+    TARGET_GUITAR_LEVEL,
+    TARGET_GUITAR_PAN,
+    TARGET_METRO_LEVEL,
     TARGET_COUNT
 };
 
@@ -145,7 +149,7 @@ constexpr BankMappings BANK_GENERAL_MAP = {
     "General",
     // Encoders (mostly unused in General)
     {
-        {TARGET_NONE, "---"},
+        {TARGET_GUITAR_PAN, "GtrPan"},
         {TARGET_NONE, "---"},
         {TARGET_NONE, "---"},
         {TARGET_NONE, "---"},
@@ -159,8 +163,8 @@ constexpr BankMappings BANK_GENERAL_MAP = {
     {
         {TARGET_DRUM_MASTER_LEVEL, "DrumMst"},
         {TARGET_SYNTH_MASTER_LEVEL, "SynthMst"},
-        {TARGET_NONE, "---"},
-        {TARGET_NONE, "---"},
+        {TARGET_GUITAR_LEVEL, "Guitar"},
+        {TARGET_METRO_LEVEL, "Metro"},
         {TARGET_NONE, "---"},
         {TARGET_NONE, "---"},
         {TARGET_SYNTH_VEL_TO_AMP, "Vel>Amp"},

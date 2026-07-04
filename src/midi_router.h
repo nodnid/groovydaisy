@@ -5,160 +5,117 @@
 #include <stdint.h>
 #include "sampler.h"
 #include "synth.h"
-#include "cc_map.h"
 
 /**
- * GroovyDaisy Unified MIDI Router
+ * GroovyDaisy MIDI router (v2).
  *
- * Centralizes all MIDI event routing so that:
- * - Live MIDI and sequencer playback go through the same path
- * - All events can be forwarded to companion app (MIDI Monitor)
- * - Easy to add MIDI output for external gear later
+ * THE single dispatch path for note events: live input (drained from the
+ * midi_to_audio ring inside the audio callback) and sequenced playback
+ * (Phase 2) both land here, so engines can't drift apart on behavior.
+ *
+ * Callback-safe: no allocation, no USB. CC events do NOT come through
+ * here — they carry bank/pickup logic and stay in the main loop
+ * (cc_map.h), applying engine parameters directly.
+ *
+ * Channel map: ch 1 (0-indexed 0) -> synth keys; ch 10 (0-indexed 9)
+ * notes 36-43 -> drum pads.
  */
 
 namespace MidiRouter
 {
 
-// Event source (for diagnostics/filtering)
+constexpr uint8_t SYNTH_CHANNEL = 0;
+constexpr uint8_t DRUM_CHANNEL  = 9;
+
 enum class Source : uint8_t
 {
-    LIVE_INPUT,    // From UART MIDI (KeyLab)
-    SEQUENCER,     // From sequencer playback
+    Live,
+    Playback // sequenced (Phase 2)
 };
 
-// Callback type for companion notification (SendMidiIn)
-typedef void (*MidiOutCallback)(uint8_t status, uint8_t data1, uint8_t data2);
+struct Event
+{
+    uint8_t status; // status byte incl. channel
+    uint8_t d1;
+    uint8_t d2;
+};
 
-// Callback type for recording to sequencer
-typedef void (*RecordCallback)(uint32_t tick, uint8_t status, uint8_t data1, uint8_t data2);
-
-/**
- * Unified MIDI Router
- *
- * Routes MIDI events to appropriate destinations:
- * - Sampler (drum notes on channel 10)
- * - Synth (notes/CCs on channel 1)
- * - Companion app (all events for MIDI Monitor)
- */
 class Router
 {
   public:
-    void Init(Sampler::Engine* sampler,
-              Synth::Engine* synth,
-              MidiOutCallback companion_cb)
+    /** Called for every LIVE event dispatched — Phase 2 wires the
+     *  capture rings here. May be null. Callback context! */
+    typedef void (*RecordHook)(const Event& e, uint32_t tick);
+
+    void Init(Sampler::Engine* sampler, Synth::Engine* synth)
     {
         sampler_ = sampler;
-        synth_ = synth;
-        companion_cb_ = companion_cb;
-        record_cb_ = nullptr;
+        synth_   = synth;
+        record_  = nullptr;
     }
 
-    /**
-     * Set callback for recording events to sequencer
-     */
-    void SetRecordCallback(RecordCallback cb) { record_cb_ = cb; }
+    void SetRecordHook(RecordHook hook) { record_ = hook; }
 
     /**
-     * Route a Note On event
-     *
-     * @param channel MIDI channel (0-15)
-     * @param note Note number (0-127)
-     * @param velocity Velocity (0-127, 0 = note off)
-     * @param source Where this event came from
-     * @param record If true, record to sequencer
-     * @param tick Current transport tick (for recording)
+     * Dispatch one note event to the engines.
+     * vel_scale: MIDI-track strip level (1.0 for live input).
+     * Runs in the audio callback — keep it lean.
      */
-    void RouteNoteOn(uint8_t channel, uint8_t note, uint8_t velocity,
-                     Source source, bool record = false, uint32_t tick = 0)
+    void Dispatch(const Event& e, Source src, uint32_t tick,
+                  float vel_scale = 1.0f)
     {
-        // Handle velocity 0 as note off (per MIDI spec)
-        if(velocity == 0)
+        uint8_t channel = e.status & 0x0F;
+        uint8_t type    = e.status & 0xF0;
+
+        bool is_on  = (type == 0x90 && e.d2 > 0);
+        bool is_off = (type == 0x80 || (type == 0x90 && e.d2 == 0));
+
+        if(!is_on && !is_off)
         {
-            RouteNoteOff(channel, note, source);
             return;
         }
 
-        // Route to sampler (drum channel)
-        if(channel == Sampler::DRUM_CHANNEL)
+        if(src == Source::Live && record_ != nullptr)
         {
-            sampler_->TriggerMidi(channel, note, velocity);
+            record_(e, tick);
         }
 
-        // Route to synth (synth channel)
-        if(channel == Synth::SYNTH_CHANNEL)
+        if(channel == DRUM_CHANNEL)
         {
-            synth_->NoteOn(note, velocity);
+            if(is_on)
+            {
+                uint8_t vel = ScaleVel(e.d2, vel_scale);
+                sampler_->TriggerMidi(channel, e.d1, vel);
+            }
+            // drums are one-shots: note-off ignored
         }
-
-        // Forward to companion (MIDI Monitor) - only for live input
-        // Sequencer events are queued separately to avoid audio callback USB calls
-        if(source == Source::LIVE_INPUT && companion_cb_ != nullptr)
+        else if(channel == SYNTH_CHANNEL)
         {
-            uint8_t status = 0x90 | (channel & 0x0F);
-            companion_cb_(status, note, velocity);
-        }
-
-        // Record if enabled
-        if(record && record_cb_ != nullptr)
-        {
-            uint8_t status = 0x90 | (channel & 0x0F);
-            record_cb_(tick, status, note, velocity);
-        }
-    }
-
-    /**
-     * Route a Note Off event
-     */
-    void RouteNoteOff(uint8_t channel, uint8_t note, Source source,
-                      bool record = false, uint32_t tick = 0)
-    {
-        // Sampler doesn't need NoteOff (one-shot samples)
-
-        // Route to synth (synth channel)
-        if(channel == Synth::SYNTH_CHANNEL)
-        {
-            synth_->NoteOff(note);
-        }
-
-        // Forward to companion (MIDI Monitor)
-        if(source == Source::LIVE_INPUT && companion_cb_ != nullptr)
-        {
-            uint8_t status = 0x80 | (channel & 0x0F);
-            companion_cb_(status, note, 0);
-        }
-
-        // Record NoteOff for synth (needed for proper playback)
-        if(record && record_cb_ != nullptr && channel == Synth::SYNTH_CHANNEL)
-        {
-            uint8_t status = 0x80 | (channel & 0x0F);
-            record_cb_(tick, status, note, 0);
-        }
-    }
-
-    /**
-     * Route a Control Change event
-     */
-    void RouteCC(uint8_t channel, uint8_t cc, uint8_t value, Source source)
-    {
-        // Route synth CCs
-        if(channel == Synth::SYNTH_CHANNEL)
-        {
-            CCMap::HandleSynthCC(cc, value, *synth_);
-        }
-
-        // Forward to companion (MIDI Monitor)
-        if(source == Source::LIVE_INPUT && companion_cb_ != nullptr)
-        {
-            uint8_t status = 0xB0 | (channel & 0x0F);
-            companion_cb_(status, cc, value);
+            if(is_on)
+            {
+                synth_->NoteOn(e.d1, ScaleVel(e.d2, vel_scale));
+            }
+            else
+            {
+                synth_->NoteOff(e.d1);
+            }
         }
     }
 
   private:
+    static uint8_t ScaleVel(uint8_t vel, float scale)
+    {
+        float v = (float)vel * scale;
+        if(v < 1.0f)
+            v = 1.0f; // scaled note-on must stay a note-on
+        if(v > 127.0f)
+            v = 127.0f;
+        return (uint8_t)v;
+    }
+
     Sampler::Engine* sampler_;
-    Synth::Engine* synth_;
-    MidiOutCallback companion_cb_;
-    RecordCallback record_cb_;
+    Synth::Engine*   synth_;
+    RecordHook       record_;
 };
 
 } // namespace MidiRouter

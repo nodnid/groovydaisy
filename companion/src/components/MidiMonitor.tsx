@@ -11,11 +11,21 @@ export interface MidiLogEntry {
 interface MidiMonitorProps {
   messages: MidiLogEntry[]
   onClear?: () => void
+  /** v2: MIDI echo over USB is opt-in (CMD_MONITOR) to save bandwidth */
+  monitorEnabled: boolean
+  onToggleMonitor: (on: boolean) => void
+  connected: boolean
 }
 
 type FilterType = 'All' | 'Notes' | 'CCs'
 
-export default function MidiMonitor({ messages, onClear }: MidiMonitorProps) {
+export default function MidiMonitor({
+  messages,
+  onClear,
+  monitorEnabled,
+  onToggleMonitor,
+  connected,
+}: MidiMonitorProps) {
   const [filter, setFilter] = useState<FilterType>('All')
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -68,6 +78,19 @@ export default function MidiMonitor({ messages, onClear }: MidiMonitorProps) {
       <div className="px-4 py-3 border-b border-groove-border flex items-center justify-between">
         <h2 className="font-semibold text-groove-text">MIDI Input</h2>
         <div className="flex items-center gap-2">
+          {/* Monitor on/off (opt-in echo from the Daisy) */}
+          <button
+            onClick={() => onToggleMonitor(!monitorEnabled)}
+            disabled={!connected}
+            className={`px-2 py-1 rounded text-xs font-semibold transition-colors disabled:opacity-50 ${
+              monitorEnabled
+                ? 'bg-groove-green text-white'
+                : 'bg-groove-border text-groove-muted hover:text-groove-text'
+            }`}
+            title="Toggle MIDI echo from the Daisy (off saves USB bandwidth)"
+          >
+            {monitorEnabled ? 'ON' : 'OFF'}
+          </button>
           {/* Filter buttons */}
           <div className="flex gap-1 text-xs">
             {(['All', 'Notes', 'CCs'] as FilterType[]).map((f) => (
@@ -102,7 +125,9 @@ export default function MidiMonitor({ messages, onClear }: MidiMonitorProps) {
         {filteredMessages.length === 0 ? (
           <p className="text-groove-muted italic">
             {messages.length === 0
-              ? 'No MIDI messages yet. Connect KeyLab and play!'
+              ? monitorEnabled
+                ? 'No MIDI messages yet. Play the KeyLab!'
+                : 'Monitor is off — turn it ON to see MIDI from the Daisy.'
               : 'No messages match the current filter.'}
           </p>
         ) : (

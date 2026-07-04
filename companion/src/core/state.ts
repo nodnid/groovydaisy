@@ -1,0 +1,200 @@
+/**
+ * Device state reducer — the portable heart of the companion app.
+ *
+ * Pure function of (state, message): no React, no DOM, no WebSerial —
+ * this file must stay portable to a future phone app / hardware screen
+ * (SPEC.md, companion responsibilities). App.tsx wraps it in useReducer.
+ *
+ * Scrolling logs (MIDI monitor, raw log, debug) intentionally live
+ * OUTSIDE this state: they're unbounded UI artifacts, not device state.
+ */
+
+import {
+  MSG_HELLO,
+  MSG_TRANSPORT,
+  MSG_SYNC,
+  MSG_VOICES,
+  MSG_SYNTH_STATE,
+  MSG_BANK,
+  MSG_FADER_STATE,
+  MSG_MIXER,
+  MSG_METRO,
+  MSG_ERROR,
+  MSG_ENGINE_MIX,
+  type ParsedMessage,
+  type SynthParams,
+  getDefaultSynthParams,
+} from './protocol'
+import { type MixerState, getDefaultMixerState } from './ccMappings'
+import { STRIP_GUITAR, STRIP_SYNTH, STRIP_DRUMS, STRIP_METRO } from './constants'
+
+export interface StripState {
+  level: number // 0-127
+  pan: number // 0-127, 64 = center
+  mute: boolean
+  sendRev: number
+  sendDly: number
+}
+
+export interface TransportState {
+  playing: boolean
+  tempoLocked: boolean
+  bpm: number
+}
+
+/** Reference point for client-side playhead interpolation. */
+export interface SyncRef {
+  tick: number
+  atMs: number // performance/wall time when the sync message arrived
+}
+
+export interface DeviceError {
+  code: number
+  context: number
+  atMs: number
+}
+
+export interface DeviceState {
+  protoVer: number | null // null until MSG_HELLO seen
+  transport: TransportState
+  sync: SyncRef
+  voices: { synth: number; drums: number }
+  synthParams: SynthParams
+  presetIndex: number
+  bank: number
+  faderStates: Array<{ pickedUp: boolean; needsPickup: boolean }>
+  engineMix: MixerState
+  strips: Record<number, StripState>
+  metro: { on: boolean; level: number }
+  lastError: DeviceError | null
+}
+
+function defaultStrip(level = 101): StripState {
+  return { level, pan: 64, mute: false, sendRev: 0, sendDly: 0 }
+}
+
+export function getInitialDeviceState(): DeviceState {
+  return {
+    protoVer: null,
+    transport: { playing: false, tempoLocked: false, bpm: 120 },
+    sync: { tick: 0, atMs: 0 },
+    voices: { synth: 0, drums: 0 },
+    synthParams: getDefaultSynthParams(),
+    presetIndex: 0,
+    bank: 2, // Synth bank (firmware default)
+    faderStates: Array(9).fill({ pickedUp: true, needsPickup: false }),
+    engineMix: getDefaultMixerState(),
+    strips: {
+      [STRIP_GUITAR]: defaultStrip(),
+      [STRIP_SYNTH]: defaultStrip(),
+      [STRIP_DRUMS]: defaultStrip(),
+      [STRIP_METRO]: defaultStrip(64),
+    },
+    metro: { on: true, level: 64 },
+    lastError: null,
+  }
+}
+
+export type DeviceAction =
+  | { kind: 'message'; msg: ParsedMessage; nowMs: number }
+  | { kind: 'reset' }
+  | { kind: 'clearError' }
+
+export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceState {
+  if (action.kind === 'reset') {
+    return getInitialDeviceState()
+  }
+  if (action.kind === 'clearError') {
+    return { ...state, lastError: null }
+  }
+
+  const { msg, nowMs } = action
+  switch (msg.type) {
+    case MSG_HELLO:
+      return { ...state, protoVer: msg.protoVer }
+
+    case MSG_TRANSPORT: {
+      const transport = {
+        playing: msg.playing,
+        tempoLocked: msg.tempoLocked,
+        bpm: msg.bpm,
+      }
+      // A transport change is also a fresh interpolation anchor: on stop
+      // the playhead freezes at the current sync; on play it starts there.
+      return { ...state, transport, sync: { ...state.sync, atMs: nowMs } }
+    }
+
+    case MSG_SYNC:
+      return { ...state, sync: { tick: msg.tick, atMs: nowMs } }
+
+    case MSG_VOICES:
+      return { ...state, voices: { synth: msg.synth, drums: msg.drums } }
+
+    case MSG_SYNTH_STATE:
+      return { ...state, synthParams: msg.params, presetIndex: msg.presetIndex }
+
+    case MSG_BANK:
+      return { ...state, bank: msg.bank }
+
+    case MSG_FADER_STATE:
+      return { ...state, faderStates: msg.states }
+
+    case MSG_MIXER:
+      return {
+        ...state,
+        strips: {
+          ...state.strips,
+          [msg.strip]: {
+            level: msg.level,
+            pan: msg.pan,
+            mute: msg.mute,
+            sendRev: msg.sendRev,
+            sendDly: msg.sendDly,
+          },
+        },
+      }
+
+    case MSG_METRO:
+      return { ...state, metro: { on: msg.on, level: msg.level } }
+
+    case MSG_ERROR:
+      return {
+        ...state,
+        lastError: { code: msg.code, context: msg.context, atMs: nowMs },
+      }
+
+    case MSG_ENGINE_MIX:
+      return {
+        ...state,
+        engineMix: {
+          drumLevels: msg.drumLevels,
+          drumPans: msg.drumPans,
+          drumMaster: msg.drumMaster,
+          synthLevel: msg.synthLevel,
+          synthPan: msg.synthPan,
+          synthMaster: msg.synthMaster,
+          masterOut: msg.masterOut,
+        },
+      }
+
+    default:
+      return state
+  }
+}
+
+/**
+ * Interpolate the playhead tick for display.
+ * tick advances at bpm * PPQN / 60 per second from the last sync anchor.
+ */
+export function interpolateTick(
+  sync: SyncRef,
+  transport: TransportState,
+  nowMs: number,
+  ppqn: number
+): number {
+  if (!transport.playing) {
+    return sync.tick
+  }
+  const elapsedS = Math.max(0, (nowMs - sync.atMs) / 1000)
+  return sync.tick + Math.floor(elapsedS * ((transport.bpm * ppqn) / 60))
+}

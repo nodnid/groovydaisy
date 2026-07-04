@@ -562,8 +562,11 @@ class Engine
                 continue;
             }
 
-            // Mix voice output (0.15 per voice = 0.60 max with 4 voices)
-            out += filt_out * amp_env * vel_amp * 0.15f;
+            // Per-voice mix gain derived from polyphony so the sum can't
+            // exceed ~1.0 before the soft clip (v1 hardcoded 0.15f here,
+            // which silently broke if NUM_VOICES changed)
+            constexpr float kVoiceMixGain = 1.0f / (float)NUM_VOICES;
+            out += filt_out * amp_env * vel_amp * kVoiceMixGain;
             active_count_++;
         }
 

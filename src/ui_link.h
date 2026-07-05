@@ -54,15 +54,16 @@ class Publisher
         Send(Protocol::MSG_HELLO, p, 3);
     }
 
-    void Transport(bool playing, bool tempo_locked, float bpm)
+    void Transport(bool playing, bool tempo_locked, float bpm, bool preroll)
     {
         uint16_t bpm_x10 = (uint16_t)(bpm * 10.0f + 0.5f);
-        uint8_t  p[4];
+        uint8_t  p[5];
         p[0] = playing ? 1 : 0;
         p[1] = tempo_locked ? 1 : 0;
         p[2] = bpm_x10 & 0xFF;
         p[3] = (bpm_x10 >> 8) & 0xFF;
-        Send(Protocol::MSG_TRANSPORT, p, 4);
+        p[4] = preroll ? 1 : 0; // count-in bar in progress
+        Send(Protocol::MSG_TRANSPORT, p, 5);
     }
 
     void Sync(uint32_t tick)

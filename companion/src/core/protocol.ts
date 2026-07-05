@@ -147,6 +147,7 @@ export interface TransportMessage {
   playing: boolean
   tempoLocked: boolean
   bpm: number // float, decoded from bpm_x10
+  preroll: boolean // count-in bar in progress
 }
 
 export interface SyncMessage {
@@ -503,6 +504,7 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
           playing: payload[0] !== 0,
           tempoLocked: payload[1] !== 0,
           bpm: (payload[2] | (payload[3] << 8)) / 10,
+          preroll: payload.length >= 5 ? payload[4] !== 0 : false,
         }
       }
       break

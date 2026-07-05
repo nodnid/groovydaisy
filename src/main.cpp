@@ -107,7 +107,10 @@ std::atomic<uint8_t> drum_voices_active{0};
 // pollute later capture windows.
 void RecordToRings(const MidiRouter::Event& e, uint32_t tick)
 {
-    if(!clk.Playing())
+    // Not while stopped (frozen ticks would pollute later windows) and not
+    // during the count-in (the grid hasn't started; everything would pile
+    // up on one tick)
+    if(!clk.Playing() || clk.InPreroll())
         return;
     uint8_t ch = e.status & 0x0F;
     if(ch == MidiRouter::DRUM_CHANNEL)
@@ -152,11 +155,23 @@ void AudioCallback(AudioHandle::InputBuffer  in,
         while(tick_i < tb.count && tb.frame[tick_i] == i)
         {
             uint32_t t = tb.tick[tick_i];
-            if(Clock::Engine::OnBeat(t))
+            if(tb.preroll[tick_i])
             {
-                metro.TriggerBeat(Clock::Engine::OnBar(t));
+                // Count-in: click only (forced — this is the whole point),
+                // higher pitch on the first click; no track playback yet
+                if(Clock::Engine::OnBeat(t))
+                {
+                    metro.TriggerBeat(t == 0, true);
+                }
             }
-            SeqTrack::ProcessTick(registry, mixer, t, SeqDispatch);
+            else
+            {
+                if(Clock::Engine::OnBeat(t))
+                {
+                    metro.TriggerBeat(Clock::Engine::OnBar(t));
+                }
+                SeqTrack::ProcessTick(registry, mixer, t, SeqDispatch);
+            }
             tick_i++;
         }
 
@@ -214,15 +229,93 @@ extern USBD_HandleTypeDef hUsbDeviceFS; // Seed onboard port (FS_INTERNAL)
 extern USBD_HandleTypeDef hUsbDeviceHS; // Pod port, ext pins (FS_EXTERNAL)
 }
 
+// ---------------------------------------------------------------------------
+// TX queue: protocol frames were fired at the CDC ports fire-and-forget,
+// and any frame arriving while the port's previous transfer was still in
+// flight silently vanished — bursts (track-data chunks, snapshots)
+// dropped their tails ("tracks stuck at loading"). Frames now queue here
+// and drain in the main loop with busy-retry per port.
+// ---------------------------------------------------------------------------
+
+struct TxFrame
+{
+    uint16_t len;
+    bool     done_int;
+    bool     done_ext;
+    uint16_t tries;
+    uint8_t  data[Protocol::MAX_MESSAGE];
+};
+
+constexpr size_t   TX_QUEUE_FRAMES = 64;
+constexpr uint16_t TX_MAX_TRIES    = 2000; // ~2 s of main-loop retries
+static TxFrame     tx_queue[TX_QUEUE_FRAMES];
+static size_t      tx_head = 0; // enqueue position
+static size_t      tx_tail = 0; // drain position
+static uint32_t    tx_dropped = 0;
+
+// Main-loop context only (enqueue and drain share the thread)
 void UsbSendRaw(const uint8_t* data, size_t len)
 {
-    if(hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED)
+    size_t next = (tx_head + 1) % TX_QUEUE_FRAMES;
+    if(next == tx_tail)
     {
-        hw.seed.usb_handle.TransmitInternal((uint8_t*)data, len);
+        tx_dropped++; // queue full — counted, surfaced via debug stats
+        return;
     }
-    if(hUsbDeviceHS.dev_state == USBD_STATE_CONFIGURED)
+    TxFrame& f = tx_queue[tx_head];
+    f.len      = (uint16_t)len;
+    f.done_int = false;
+    f.done_ext = false;
+    f.tries    = 0;
+    memcpy(f.data, data, len);
+    tx_head = next;
+}
+
+void DrainTxQueue()
+{
+    // A few frames per pass keeps latency low without hogging the loop
+    for(int budget = 0; budget < 4 && tx_tail != tx_head; budget++)
     {
-        hw.seed.usb_handle.TransmitExternal((uint8_t*)data, len);
+        TxFrame& f = tx_queue[tx_tail];
+
+        if(!f.done_int)
+        {
+            if(hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED)
+            {
+                f.done_int = true; // no host on this port: skip
+            }
+            else if(hw.seed.usb_handle.TransmitInternal(f.data, f.len)
+                    == UsbHandle::Result::OK)
+            {
+                f.done_int = true;
+            }
+        }
+        if(!f.done_ext)
+        {
+            if(hUsbDeviceHS.dev_state != USBD_STATE_CONFIGURED)
+            {
+                f.done_ext = true;
+            }
+            else if(hw.seed.usb_handle.TransmitExternal(f.data, f.len)
+                    == UsbHandle::Result::OK)
+            {
+                f.done_ext = true;
+            }
+        }
+
+        if(f.done_int && f.done_ext)
+        {
+            tx_tail = (tx_tail + 1) % TX_QUEUE_FRAMES;
+        }
+        else if(++f.tries > TX_MAX_TRIES)
+        {
+            tx_dropped++; // port wedged: don't dam the queue forever
+            tx_tail = (tx_tail + 1) % TX_QUEUE_FRAMES;
+        }
+        else
+        {
+            break; // port busy: retry this frame next pass, keep order
+        }
     }
 }
 
@@ -298,7 +391,7 @@ void SendMixerStrip(uint8_t strip)
 
 void SendTransport()
 {
-    ui.Transport(clk.Playing(), clk.Locked(), clk.Bpm());
+    ui.Transport(clk.Playing(), clk.Locked(), clk.Bpm(), clk.InPreroll());
 }
 
 void SendFaderState()
@@ -446,19 +539,18 @@ void SendTrackData(int slot)
 
 // Rolling-buffer visibility: how many bars back a capture could reach,
 // and whether the source played within the last beat.
-static uint8_t RingSpanBars(const Capture::MidiRing& ring)
+// "How far back could a grab reach?" — measured from when the clock
+// started running (the box listens whether or not you play; an empty
+// window is refused at capture time with its own message)
+static uint8_t RingSpanBars(const Capture::MidiRing&)
 {
-    uint32_t head = ring.Head();
-    if(head == 0 || !clk.Playing())
+    if(!clk.Playing() || clk.InPreroll())
         return 0;
-    uint32_t first = head > Capture::RING_EVENTS
-                         ? head - Capture::RING_EVENTS
-                         : 0;
-    uint32_t oldest = ring.At(first).tick;
-    uint32_t now    = clk.NowTick();
-    if(now <= oldest)
+    uint32_t now = clk.NowTick();
+    uint32_t run = clk.RunStartTick();
+    if(now <= run)
         return 0;
-    uint32_t bars = (now - oldest) / Clock::TICKS_PER_BAR;
+    uint32_t bars = (now - run) / Clock::TICKS_PER_BAR;
     return bars > Capture::MAX_BARS ? Capture::MAX_BARS : (uint8_t)bars;
 }
 
@@ -1102,6 +1194,9 @@ int main(void)
             }
         }
 
+        // Drain queued protocol frames (busy-retry per port)
+        DrainTxQueue();
+
         // Pending retrospective captures fire when the clock crosses
         // their bar boundary
         PollPendingCaptures();
@@ -1272,7 +1367,12 @@ int main(void)
         {
             uint32_t t       = clk.NowTick();
             bool     on_beat = (t % Clock::PPQN) < 12;
-            if(clk.Playing())
+            if(clk.InPreroll())
+            {
+                // Count-in: amber pulse — "get ready"
+                hw.led1.Set(1.0f, 0.5f, 0.0f);
+            }
+            else if(clk.Playing())
             {
                 hw.led1.Set(0.0f, on_beat ? 1.0f : 0.3f, 0.0f);
             }

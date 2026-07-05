@@ -31,10 +31,11 @@ class Engine
     void SetEnabled(bool on) { enabled_ = on; }
     bool Enabled() const { return enabled_; }
 
-    /** Call on beat ticks (audio callback). */
-    void TriggerBeat(bool bar_downbeat)
+    /** Call on beat ticks (audio callback). `force` bypasses the enable
+     *  switch — the count-in must click even with the metronome off. */
+    void TriggerBeat(bool bar_downbeat, bool force = false)
     {
-        if(!enabled_)
+        if(!enabled_ && !force)
             return;
         float freq = bar_downbeat ? 1760.0f : 1175.0f; // A6 / D6-ish
         phase_inc_ = freq / sample_rate_;

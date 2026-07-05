@@ -7,6 +7,8 @@ export type { TransportState }
 interface TransportBarProps {
   transport: TransportState
   sync: SyncRef
+  /** Bars of the longest loop; 0 = no loops yet (linear time display) */
+  longestBars: number
   onPlay: () => void
   onStop: () => void
   onRewind: () => void
@@ -26,6 +28,7 @@ interface TransportBarProps {
 export default function TransportBar({
   transport,
   sync,
+  longestBars,
   onPlay,
   onStop,
   onRewind,
@@ -86,7 +89,10 @@ export default function TransportBar({
     [transport.bpm, onTempoChange]
   )
 
-  const bar = Math.floor(displayTick / TICKS_PER_BAR) + 1
+  const absBar = Math.floor(displayTick / TICKS_PER_BAR) + 1
+  // Musical time is circular: once loops exist, show position within the
+  // longest loop's cycle ("bar 3 of 8") instead of counting forever
+  const bar = longestBars > 0 ? ((absBar - 1) % longestBars) + 1 : absBar
   const beat = Math.floor((displayTick % TICKS_PER_BAR) / PPQN) + 1
   const beatProgress = ((displayTick % TICKS_PER_BAR) / TICKS_PER_BAR) * 100
   const bpmDisplay = Number.isInteger(transport.bpm)
@@ -140,10 +146,24 @@ export default function TransportBar({
         {/* Position Display */}
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <div className="text-3xl font-mono font-bold text-groove-text">
-              {bar}.{beat}
-            </div>
-            <div className="text-xs text-groove-muted">BAR.BEAT</div>
+            {transport.preroll ? (
+              <>
+                <div className="text-3xl font-mono font-bold text-groove-yellow animate-pulse">
+                  1 · 2 · 3 · 4
+                </div>
+                <div className="text-xs text-groove-yellow">COUNT-IN</div>
+              </>
+            ) : (
+              <>
+                <div className="text-3xl font-mono font-bold text-groove-text">
+                  {bar}.{beat}
+                  {longestBars > 0 && (
+                    <span className="text-lg text-groove-muted"> / {longestBars}</span>
+                  )}
+                </div>
+                <div className="text-xs text-groove-muted">BAR.BEAT</div>
+              </>
+            )}
           </div>
         </div>
 

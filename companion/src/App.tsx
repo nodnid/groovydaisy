@@ -37,6 +37,7 @@ import {
   buildUndoCommand,
   buildTrackDeleteCommand,
   buildSrcLenCommand,
+  buildReqTrackDataCommand,
   SRC_PADS,
   SRC_KEYS,
   CMD_PLAY,
@@ -152,6 +153,25 @@ function App() {
   const send = useCallback((bytes: Uint8Array) => {
     serialRef.current?.send(bytes)
   }, [])
+
+  // Safety net for dropped note-data chunks: any track whose content is
+  // missing or stalled gets re-requested (dedupe in the reducer makes
+  // retries idempotent)
+  useEffect(() => {
+    if (!connected) return
+    const t = setInterval(() => {
+      const now = performance.now()
+      for (const track of Object.values(device.tracks)) {
+        const data = device.trackData[track.slot]
+        const missing = !data || data.gen !== track.gen
+        const stalled = data && !data.complete && now - data.lastChunkAtMs > 700
+        if (missing || stalled) {
+          send(buildReqTrackDataCommand(track.slot, track.gen))
+        }
+      }
+    }, 800)
+    return () => clearInterval(t)
+  }, [connected, device.tracks, device.trackData, send])
 
   // --- command handlers ---
   const handlePlay = useCallback(() => send(buildMessage(CMD_PLAY)), [send])
@@ -342,6 +362,10 @@ function App() {
         <TransportBar
           transport={device.transport}
           sync={device.sync}
+          longestBars={Object.values(device.tracks).reduce(
+            (max, t) => Math.max(max, t.lengthBars),
+            0
+          )}
           onPlay={handlePlay}
           onStop={handleStop}
           onRewind={handleRewind}

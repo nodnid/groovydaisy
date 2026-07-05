@@ -25,18 +25,19 @@ static UiLink::Publisher MakePublisher()
 TEST(ui_link_transport_golden_bytes)
 {
     auto pub = MakePublisher();
-    pub.Transport(true, false, 120.0f);
+    pub.Transport(true, false, 120.0f, false);
 
-    // [AA][02][04 00][playing=1][locked=0][bpm_x10=1200 LE][checksum]
-    CHECK_EQ(captured_len, 9);
+    // [AA][02][05 00][playing=1][locked=0][bpm_x10=1200 LE][preroll=0][csum]
+    CHECK_EQ(captured_len, 10);
     CHECK_EQ(captured[0], 0xAA);
     CHECK_EQ(captured[1], Protocol::MSG_TRANSPORT);
-    CHECK_EQ(captured[2], 4); // len lo
+    CHECK_EQ(captured[2], 5); // len lo
     CHECK_EQ(captured[3], 0); // len hi
     CHECK_EQ(captured[4], 1); // playing
     CHECK_EQ(captured[5], 0); // locked
     CHECK_EQ(captured[6], 1200 & 0xFF);
     CHECK_EQ(captured[7], 1200 >> 8);
+    CHECK_EQ(captured[8], 0); // preroll
 
     // Frame must parse back cleanly
     Protocol::Parser parser;
@@ -52,11 +53,12 @@ TEST(ui_link_transport_golden_bytes)
 TEST(ui_link_transport_fractional_bpm)
 {
     auto pub = MakePublisher();
-    pub.Transport(false, true, 93.7f);
+    pub.Transport(false, true, 93.7f, true);
     uint16_t bpm_x10 = captured[6] | (captured[7] << 8);
     CHECK_EQ(bpm_x10, 937);
     CHECK_EQ(captured[4], 0); // stopped
     CHECK_EQ(captured[5], 1); // locked
+    CHECK_EQ(captured[8], 1); // preroll
 }
 
 TEST(ui_link_sync_tick_le)

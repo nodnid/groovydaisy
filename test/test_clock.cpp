@@ -28,6 +28,58 @@ TEST(clock_no_ticks_while_stopped)
     CHECK_EQ(RunFor(e, 1.0f), 0);
 }
 
+TEST(clock_count_in_one_bar_before_grid)
+{
+    Engine e;
+    e.Init(kSampleRate); // count-in defaults ON
+    CHECK(e.SetBpm(120.0f));
+    e.Play();
+    CHECK(e.InPreroll());
+
+    // Collect ticks over 4s @120 = 2 bars of wall time
+    TickBlock tb;
+    long preroll_ticks = 0, normal_ticks = 0;
+    for(long i = 0; i < (long)(4.0f * kSampleRate); i += kBlock)
+    {
+        e.Advance(kBlock, tb);
+        for(size_t t = 0; t < tb.count; t++)
+        {
+            if(tb.preroll[t])
+                preroll_ticks++;
+            else
+                normal_ticks++;
+        }
+    }
+    // Exactly one bar of count-in ticks, then the grid runs
+    CHECK_EQ(preroll_ticks, 384);
+    CHECK_NEAR(normal_ticks, 384, 2); // remaining ~1 bar of the 4s
+    CHECK(!e.InPreroll());
+    // The grid itself did not advance during the count-in
+    CHECK_NEAR(e.NowTick(), 384, 2);
+}
+
+TEST(clock_count_in_disabled_starts_immediately)
+{
+    Engine e;
+    e.Init(kSampleRate);
+    e.SetCountIn(false);
+    e.Play();
+    CHECK(!e.InPreroll());
+    CHECK_NEAR(RunFor(e, 1.0f), 192, 2); // ticks flow from the start
+}
+
+TEST(clock_stop_during_count_in_cancels_it)
+{
+    Engine e;
+    e.Init(kSampleRate);
+    e.Play();
+    TickBlock tb;
+    e.Advance(4800, tb); // 0.1 s into the count-in
+    e.Stop();
+    CHECK(!e.InPreroll());
+    CHECK_EQ(e.NowTick(), 0u); // grid never started
+}
+
 TEST(clock_tick_rates)
 {
     // 60 BPM: 96/s. 120: 192/s. 200: 320/s.
@@ -47,6 +99,7 @@ TEST(clock_tick_is_monotonic_no_pattern_wrap)
 {
     Engine e;
     e.Init(kSampleRate);
+    e.SetCountIn(false); // testing tick monotonicity, not the count-in
     e.Play();
     RunFor(e, 30.0f);
     // 30s @120 BPM = 5760 ticks — far beyond v1's 1536-tick pattern wrap.
@@ -57,6 +110,7 @@ TEST(clock_frame_offsets_ordered_within_block)
 {
     Engine e;
     e.Init(kSampleRate);
+    e.SetCountIn(false); // tick numbering restarts at the preroll boundary
     CHECK(e.SetBpm(200.0f));
     e.Play();
     TickBlock tb;
@@ -75,6 +129,7 @@ TEST(clock_rewind_resets_stop_preserves)
 {
     Engine e;
     e.Init(kSampleRate);
+    e.SetCountIn(false); // testing stop/rewind, not the count-in
     e.Play();
     RunFor(e, 1.0f);
     uint32_t at = e.NowTick();

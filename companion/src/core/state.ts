@@ -46,6 +46,7 @@ export interface TransportState {
   playing: boolean
   tempoLocked: boolean
   bpm: number
+  preroll: boolean // count-in bar in progress
 }
 
 /** Reference point for client-side playhead interpolation. */
@@ -77,12 +78,15 @@ export interface CaptureFlash {
   atMs: number
 }
 
-/** Assembled (possibly still partial) note content of a track. */
+/** Assembled (possibly still partial) note content of a track.
+ *  Chunks are keyed by index so retries/duplicates can't double events. */
 export interface TrackData {
   gen: number
   chunkCount: number
-  chunksSeen: number
-  events: TrackEvent[]
+  chunks: Record<number, TrackEvent[]>
+  events: TrackEvent[] // derived: chunks flattened in index order
+  complete: boolean
+  lastChunkAtMs: number // for stall detection -> re-request
 }
 
 /** Rolling-buffer visibility per capture source. */
@@ -119,7 +123,7 @@ function defaultStrip(level = 101): StripState {
 export function getInitialDeviceState(): DeviceState {
   return {
     protoVer: null,
-    transport: { playing: false, tempoLocked: false, bpm: 120 },
+    transport: { playing: false, tempoLocked: false, bpm: 120, preroll: false },
     sync: { tick: 0, atMs: 0 },
     voices: { synth: 0, drums: 0 },
     synthParams: getDefaultSynthParams(),
@@ -174,6 +178,7 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
         playing: msg.playing,
         tempoLocked: msg.tempoLocked,
         bpm: msg.bpm,
+        preroll: msg.preroll,
       }
       // A transport change is also a fresh interpolation anchor: on stop
       // the playhead freezes at the current sync; on play it starts there.
@@ -258,20 +263,28 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
 
     case MSG_TRACK_DATA: {
       const prev = state.trackData[msg.slot]
-      // First chunk of a (new) generation starts a fresh assembly
-      const base: TrackData =
+      // A different generation (or chunk plan) starts a fresh assembly
+      const chunks: Record<number, TrackEvent[]> =
         prev && prev.gen === msg.gen && prev.chunkCount === msg.chunkCount
-          ? prev
-          : { gen: msg.gen, chunkCount: msg.chunkCount, chunksSeen: 0, events: [] }
+          ? { ...prev.chunks, [msg.chunkIdx]: msg.events }
+          : { [msg.chunkIdx]: msg.events }
+      const seen = Object.keys(chunks).length
+      const complete = seen >= msg.chunkCount
+      const events: TrackEvent[] = []
+      for (let i = 0; i < msg.chunkCount; i++) {
+        if (chunks[i]) events.push(...chunks[i])
+      }
       return {
         ...state,
         trackData: {
           ...state.trackData,
           [msg.slot]: {
-            ...base,
-            chunksSeen: base.chunksSeen + 1,
-            // chunks arrive in order (single serial stream); append
-            events: [...base.events, ...msg.events],
+            gen: msg.gen,
+            chunkCount: msg.chunkCount,
+            chunks,
+            events,
+            complete,
+            lastChunkAtMs: nowMs,
           },
         },
       }

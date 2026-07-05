@@ -36,8 +36,9 @@ constexpr int      TAP_HISTORY    = 4;
 struct TickBlock
 {
     static constexpr size_t MAX_TICKS = 16;
-    uint32_t tick[MAX_TICKS];   // absolute tick numbers
-    size_t   frame[MAX_TICKS];  // frame offset within the block
+    uint32_t tick[MAX_TICKS];    // absolute tick numbers (or preroll pos)
+    size_t   frame[MAX_TICKS];   // frame offset within the block
+    bool     preroll[MAX_TICKS]; // count-in tick: metronome only
     size_t   count;
 };
 
@@ -46,15 +47,19 @@ class Engine
   public:
     void Init(float sample_rate)
     {
-        sample_rate_ = sample_rate;
-        playing_     = false;
-        locked_      = false;
-        bpm_         = DEFAULT_BPM;
-        tick_        = 0;
-        accumulator_ = 0.0f;
-        tap_count_   = 0;
-        last_tap_ms_ = 0;
-        dirty_       = true;
+        sample_rate_       = sample_rate;
+        playing_           = false;
+        locked_            = false;
+        bpm_               = DEFAULT_BPM;
+        tick_              = 0;
+        accumulator_       = 0.0f;
+        tap_count_         = 0;
+        last_tap_ms_       = 0;
+        dirty_             = true;
+        count_in_          = true; // one bar of click before the grid starts
+        preroll_remaining_ = 0;
+        preroll_pos_       = 0;
+        run_start_tick_    = 0;
         UpdateTickInterval();
     }
 
@@ -76,12 +81,36 @@ class Engine
             if(accumulator_ >= samples_per_tick_)
             {
                 accumulator_ -= samples_per_tick_;
-                tick_++;
-                if(out.count < TickBlock::MAX_TICKS)
+                if(preroll_remaining_ > 0)
                 {
-                    out.tick[out.count]  = tick_;
-                    out.frame[out.count] = f;
-                    out.count++;
+                    // Count-in: the grid hasn't started; emit metronome-only
+                    // ticks positioned 0..TICKS_PER_BAR-1 so OnBeat() lands
+                    // on the four count-in clicks
+                    if(out.count < TickBlock::MAX_TICKS)
+                    {
+                        out.tick[out.count]    = preroll_pos_;
+                        out.frame[out.count]   = f;
+                        out.preroll[out.count] = true;
+                        out.count++;
+                    }
+                    preroll_pos_++;
+                    preroll_remaining_--;
+                    if(preroll_remaining_ == 0)
+                    {
+                        run_start_tick_ = tick_;
+                        dirty_          = true; // publish preroll -> running
+                    }
+                }
+                else
+                {
+                    tick_++;
+                    if(out.count < TickBlock::MAX_TICKS)
+                    {
+                        out.tick[out.count]    = tick_;
+                        out.frame[out.count]   = f;
+                        out.preroll[out.count] = false;
+                        out.count++;
+                    }
                 }
             }
         }
@@ -94,7 +123,12 @@ class Engine
         if(!playing_)
         {
             playing_ = true;
-            dirty_   = true;
+            // One bar of count-in: pressing play and playing your downbeat
+            // at the same instant is a two-person job otherwise
+            preroll_remaining_ = count_in_ ? TICKS_PER_BAR : 0;
+            preroll_pos_       = 0;
+            run_start_tick_    = tick_;
+            dirty_             = true;
         }
     }
 
@@ -102,19 +136,30 @@ class Engine
     {
         if(playing_)
         {
-            playing_ = false;
-            dirty_   = true;
+            playing_           = false;
+            preroll_remaining_ = 0;
+            dirty_             = true;
         }
     }
 
     /** Stop + return to tick 0 (double-tap stop). Never clears content. */
     void Rewind()
     {
-        playing_     = false;
-        tick_        = 0;
-        accumulator_ = 0.0f;
-        dirty_       = true;
+        playing_           = false;
+        preroll_remaining_ = 0;
+        tick_              = 0;
+        accumulator_       = 0.0f;
+        run_start_tick_    = 0;
+        dirty_             = true;
     }
+
+    void SetCountIn(bool on) { count_in_ = on; }
+    bool CountIn() const { return count_in_; }
+    bool InPreroll() const { return playing_ && preroll_remaining_ > 0; }
+
+    /** Tick at which the current run's grid started (for "how many bars
+     *  has the box been listening" displays). */
+    uint32_t RunStartTick() const { return run_start_tick_; }
 
     // --- Tempo -----------------------------------------------------------
 
@@ -241,6 +286,11 @@ class Engine
     uint32_t intervals_[TAP_HISTORY];
     uint32_t last_tap_ms_;
     int      tap_count_;
+
+    bool     count_in_;
+    uint32_t preroll_remaining_;
+    uint32_t preroll_pos_;
+    uint32_t run_start_tick_;
 };
 
 } // namespace Clock

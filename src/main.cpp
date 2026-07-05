@@ -240,81 +240,81 @@ extern USBD_HandleTypeDef hUsbDeviceHS; // Pod port, ext pins (FS_EXTERNAL)
 struct TxFrame
 {
     uint16_t len;
-    bool     done_int;
-    bool     done_ext;
-    uint16_t tries;
     uint8_t  data[Protocol::MAX_MESSAGE];
 };
 
-constexpr size_t   TX_QUEUE_FRAMES = 64;
-constexpr uint16_t TX_MAX_TRIES    = 2000; // ~2 s of main-loop retries
-static TxFrame     tx_queue[TX_QUEUE_FRAMES];
-static size_t      tx_head = 0; // enqueue position
-static size_t      tx_tail = 0; // drain position
-static uint32_t    tx_dropped = 0;
+// One shared frame ring, one independent read cursor per port. A port
+// that's enumerated but has no listener (its /dev node not open) hangs
+// its endpoint after the first frame — with per-port cursors it only
+// lap-drops ITS copies under enqueue pressure and can never dam the
+// other port's stream (the first TX-queue version did exactly that:
+// head-of-line blocking behind the deaf port, UI seconds out of step).
+constexpr size_t TX_QUEUE_FRAMES = 64;
+static TxFrame   tx_queue[TX_QUEUE_FRAMES];
+static size_t    tx_head = 0; // enqueue position
+static size_t    tx_cur_int = 0; // Seed-port read cursor
+static size_t    tx_cur_ext = 0; // Pod-port read cursor
+static uint32_t  tx_lapped_int = 0;
+static uint32_t  tx_lapped_ext = 0;
 
 // Main-loop context only (enqueue and drain share the thread)
 void UsbSendRaw(const uint8_t* data, size_t len)
 {
     size_t next = (tx_head + 1) % TX_QUEUE_FRAMES;
-    if(next == tx_tail)
+    // Lap protection: a stalled port loses its oldest frame, that's all
+    if(next == tx_cur_int)
     {
-        tx_dropped++; // queue full — counted, surfaced via debug stats
-        return;
+        tx_cur_int = (tx_cur_int + 1) % TX_QUEUE_FRAMES;
+        tx_lapped_int++;
+    }
+    if(next == tx_cur_ext)
+    {
+        tx_cur_ext = (tx_cur_ext + 1) % TX_QUEUE_FRAMES;
+        tx_lapped_ext++;
     }
     TxFrame& f = tx_queue[tx_head];
     f.len      = (uint16_t)len;
-    f.done_int = false;
-    f.done_ext = false;
-    f.tries    = 0;
     memcpy(f.data, data, len);
     tx_head = next;
 }
 
 void DrainTxQueue()
 {
-    // A few frames per pass keeps latency low without hogging the loop
-    for(int budget = 0; budget < 4 && tx_tail != tx_head; budget++)
+    // Seed onboard port
+    if(hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED)
     {
-        TxFrame& f = tx_queue[tx_tail];
+        tx_cur_int = tx_head; // no host: nothing to say to nobody
+    }
+    else
+    {
+        for(int n = 0; n < 4 && tx_cur_int != tx_head; n++)
+        {
+            TxFrame& f = tx_queue[tx_cur_int];
+            if(hw.seed.usb_handle.TransmitInternal(f.data, f.len)
+               != UsbHandle::Result::OK)
+            {
+                break; // in flight/busy: retry next pass
+            }
+            tx_cur_int = (tx_cur_int + 1) % TX_QUEUE_FRAMES;
+        }
+    }
 
-        if(!f.done_int)
+    // Pod port (external pins)
+    if(hUsbDeviceHS.dev_state != USBD_STATE_CONFIGURED)
+    {
+        tx_cur_ext = tx_head;
+    }
+    else
+    {
+        for(int n = 0; n < 4 && tx_cur_ext != tx_head; n++)
         {
-            if(hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED)
+            TxFrame& f = tx_queue[tx_cur_ext];
+            if(hw.seed.usb_handle.TransmitExternal(f.data, f.len)
+               != UsbHandle::Result::OK)
             {
-                f.done_int = true; // no host on this port: skip
+                break;
             }
-            else if(hw.seed.usb_handle.TransmitInternal(f.data, f.len)
-                    == UsbHandle::Result::OK)
-            {
-                f.done_int = true;
-            }
-        }
-        if(!f.done_ext)
-        {
-            if(hUsbDeviceHS.dev_state != USBD_STATE_CONFIGURED)
-            {
-                f.done_ext = true;
-            }
-            else if(hw.seed.usb_handle.TransmitExternal(f.data, f.len)
-                    == UsbHandle::Result::OK)
-            {
-                f.done_ext = true;
-            }
-        }
-
-        if(f.done_int && f.done_ext)
-        {
-            tx_tail = (tx_tail + 1) % TX_QUEUE_FRAMES;
-        }
-        else if(++f.tries > TX_MAX_TRIES)
-        {
-            tx_dropped++; // port wedged: don't dam the queue forever
-            tx_tail = (tx_tail + 1) % TX_QUEUE_FRAMES;
-        }
-        else
-        {
-            break; // port busy: retry this frame next pass, keep order
+            tx_cur_ext = (tx_cur_ext + 1) % TX_QUEUE_FRAMES;
         }
     }
 }

@@ -16,6 +16,8 @@ speaker-connected device:
   stopping the music.
 
 It is an *instrument for a group*, not a production tool for one person.
+In one line: **a fully featured groovebox with the jamability of a
+looper** — capture-first at the engine, DAW-legible at the screen.
 
 ### Design principles
 
@@ -337,12 +339,22 @@ not locked in the spec.
 **Role: window and workbench, not brain.** Live it shows state; at home it
 edits and manages.
 
-- **Live view**: transport, tempo (+ lock state), per-track loop rings
-  (kind, length, playhead, mute state), mixer, voice activity, guitar input
-  meter, **audio memory gauge in bars remaining**, per-source capture
-  buttons, capture confirmation flashes (what got grabbed, as which track).
-- **Workbench**: MIDI monitor, raw protocol log, sample upload, patch
-  save/load, project save/load (later).
+- **Tabbed, arrange-first** (per hands-on feedback 2026-07-05: the flat
+  panel stack was cluttered and redundant):
+  - **Arrange** (primary): DAW-style track lanes showing actual captured
+    content (mini drum-grid / piano-roll renderings from MSG_TRACK_DATA),
+    per-lane looping playhead, inline mute/level, hold-to-delete;
+    transport + capture strip with **per-source history rings** that
+    visualize the rolling buffer filling ("4 bars banked, ready to grab")
+    — the always-listening engine made visible; memory gauge (bars).
+  - **Sound**: synth params + presets (+ drum params later).
+  - **Mix**: the one mixer — track strips, guitar, engine strips, metro,
+    master. No mixer state duplicated anywhere else.
+  - **Debug**: MIDI monitor, raw log, protocol stats. Hidden by default.
+- Content rendering is read-only in v2; **note editing** is a candidate
+  post-v2 milestone (the groovebox pull), enabled by the same
+  MSG_TRACK_DATA foundation — not an architecture change.
+- Sample upload, patch/project save/load: later (workbench duties).
 - **Portability**: keep `core/` (protocol, state, MIDI utils) free of DOM and
   WebSerial imports so it drops into a future React Native / Capacitor phone
   app or an embedded-screen UI. `serial/` is the swappable transport.

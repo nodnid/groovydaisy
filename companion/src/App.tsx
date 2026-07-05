@@ -1,10 +1,11 @@
 import { useState, useRef, useCallback, useReducer, useEffect } from 'react'
 import ConnectionStatus from './components/ConnectionStatus'
 import TransportBar from './components/TransportBar'
+import TabBar, { type TabId } from './components/global/TabBar'
+import ArrangeView from './components/arrange/ArrangeView'
+import MixPanel from './components/MixPanel'
 import MidiMonitor, { type MidiLogEntry } from './components/MidiMonitor'
 import EngineState from './components/EngineState'
-import LiveMixer from './components/LiveMixer'
-import TrackList from './components/TrackList'
 import RawLog from './components/RawLog'
 import SynthPanel from './components/SynthPanel'
 import PresetManager from './components/PresetManager'
@@ -36,6 +37,8 @@ import {
   buildUndoCommand,
   buildTrackDeleteCommand,
   buildSrcLenCommand,
+  SRC_PADS,
+  SRC_KEYS,
   CMD_PLAY,
   CMD_STOP,
   CMD_REWIND,
@@ -64,7 +67,8 @@ function App() {
   // Device state: pure reducer over protocol messages (core/state.ts)
   const [device, dispatch] = useReducer(deviceReducer, undefined, getInitialDeviceState)
 
-  // UI-only state (logs, connection, toggles)
+  // UI-only state
+  const [activeTab, setActiveTab] = useState<TabId>('arrange')
   const [connected, setConnected] = useState(false)
   const [showRawLog, setShowRawLog] = useState(false)
   const [logs, setLogs] = useState<LogEntry[]>([])
@@ -72,6 +76,8 @@ function App() {
   const [midiMessages, setMidiMessages] = useState<MidiLogEntry[]>([])
   const [checksumErrors, setChecksumErrors] = useState<number>(0)
   const [monitorEnabled, setMonitorEnabled] = useState(false)
+  const [padBars, setPadBars] = useState(4)
+  const [keyBars, setKeyBars] = useState(4)
   const serialRef = useRef<WebSerialPort | null>(null)
   const parserRef = useRef<ProtocolParser | null>(null)
 
@@ -103,10 +109,8 @@ function App() {
 
   const handleMessage = useCallback(
     (msg: ParsedMessage) => {
-      // All device state flows through the reducer...
       dispatch({ kind: 'message', msg, nowMs: performance.now() })
 
-      // ...log-type side effects handled here
       switch (msg.type) {
         case MSG_DEBUG:
           setDebugMessages((prev) => {
@@ -207,8 +211,23 @@ function App() {
       send(buildMixerCommand(slot, MIX_FIELD_MUTE, mute ? 1 : 0)),
     [send]
   )
-  const handleSrcLen = useCallback(
-    (source: number, bars: number) => send(buildSrcLenCommand(source, bars)),
+  const handleTrackLevel = useCallback(
+    (slot: number, level: number) =>
+      send(buildMixerCommand(slot, MIX_FIELD_LEVEL, level)),
+    [send]
+  )
+  const handlePadBars = useCallback(
+    (bars: number) => {
+      setPadBars(bars)
+      send(buildSrcLenCommand(SRC_PADS, bars))
+    },
+    [send]
+  )
+  const handleKeyBars = useCallback(
+    (bars: number) => {
+      setKeyBars(bars)
+      send(buildSrcLenCommand(SRC_KEYS, bars))
+    },
     [send]
   )
 
@@ -318,8 +337,8 @@ function App() {
         </div>
       </header>
 
-      {/* Transport Bar */}
-      <div className="px-4 pt-4">
+      {/* Transport: global, visible on every tab */}
+      <div className="px-4 pt-3 pb-1">
         <TransportBar
           transport={device.transport}
           sync={device.sync}
@@ -332,115 +351,123 @@ function App() {
         />
       </div>
 
-      {/* Main Content */}
-      <main className="flex-1 p-4 space-y-4 overflow-y-auto">
-        {/* Loop Tracks */}
-        <TrackList
-          tracks={device.tracks}
-          strips={device.strips}
-          transport={device.transport}
-          sync={device.sync}
-          captureFlash={device.captureFlash}
-          onCapture={handleCapture}
-          onUndo={handleUndo}
-          onDelete={handleTrackDelete}
-          onMute={handleTrackMute}
-          onSrcLen={handleSrcLen}
-          connected={connected}
-        />
+      <TabBar active={activeTab} onChange={setActiveTab} />
 
-        {/* Live Mixer */}
-        <LiveMixer
-          strips={device.strips}
-          masterOut={device.engineMix.masterOut}
-          metroOn={device.metro.on}
-          onStripChange={handleStripChange}
-          onMasterChange={handleMasterChange}
-          onMetroToggle={handleMetroToggle}
-          connected={connected}
-        />
-
-        {/* Top Row - MIDI Monitor, Engine State, Presets */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <MidiMonitor
-            messages={midiMessages}
-            onClear={() => setMidiMessages([])}
-            monitorEnabled={monitorEnabled}
-            onToggleMonitor={handleToggleMonitor}
+      {/* Tab content */}
+      <main className="flex-1 p-4 overflow-y-auto">
+        {activeTab === 'arrange' && (
+          <ArrangeView
+            device={device}
+            padBars={padBars}
+            keyBars={keyBars}
+            onPadBars={handlePadBars}
+            onKeyBars={handleKeyBars}
+            onCapture={handleCapture}
+            onUndo={handleUndo}
+            onMute={handleTrackMute}
+            onLevel={handleTrackLevel}
+            onDelete={handleTrackDelete}
             connected={connected}
           />
-          <EngineState
-            checksumErrors={checksumErrors}
-            transport={device.transport}
-            synthVoices={device.voices.synth}
-            drumVoices={device.voices.drums}
-            protoVer={device.protoVer}
-          />
-          <PresetManager
-            currentPresetIndex={device.presetIndex}
-            currentParams={device.synthParams}
-            onLoadFactoryPreset={handleLoadFactoryPreset}
-            onLoadUserPreset={handleLoadUserPreset}
+        )}
+
+        {activeTab === 'sound' && (
+          <div className="space-y-4">
+            <PresetManager
+              currentPresetIndex={device.presetIndex}
+              currentParams={device.synthParams}
+              onLoadFactoryPreset={handleLoadFactoryPreset}
+              onLoadUserPreset={handleLoadUserPreset}
+              connected={connected}
+            />
+            <SynthPanel
+              params={device.synthParams}
+              onParamChange={handleSynthParamChange}
+              connected={connected}
+            />
+          </div>
+        )}
+
+        {activeTab === 'mix' && (
+          <MixPanel
+            device={device}
+            onStripChange={handleStripChange}
+            onMasterChange={handleMasterChange}
+            onMetroToggle={handleMetroToggle}
             connected={connected}
           />
-        </div>
+        )}
 
-        {/* CC Control Panel */}
-        <CCControlPanel
-          currentBank={device.bank as Bank}
-          faderStates={device.faderStates}
-          mixerState={device.engineMix}
-          synthParams={device.synthParams}
-          onBankChange={handleBankChange}
-          connected={connected}
-        />
-
-        {/* Synth Panel */}
-        <SynthPanel
-          params={device.synthParams}
-          onParamChange={handleSynthParamChange}
-          connected={connected}
-        />
-
-        {/* Debug Messages */}
-        {debugMessages.length > 0 && (
-          <div className="bg-groove-panel border border-groove-border rounded-lg">
-            <div className="px-4 py-3 border-b border-groove-border flex items-center justify-between">
-              <h2 className="font-semibold text-groove-text">Debug Messages</h2>
-              <button
-                onClick={() => setDebugMessages([])}
-                className="text-xs text-groove-muted hover:text-groove-text"
-              >
-                Clear
-              </button>
+        {activeTab === 'debug' && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <MidiMonitor
+                messages={midiMessages}
+                onClear={() => setMidiMessages([])}
+                monitorEnabled={monitorEnabled}
+                onToggleMonitor={handleToggleMonitor}
+                connected={connected}
+              />
+              <EngineState
+                checksumErrors={checksumErrors}
+                transport={device.transport}
+                synthVoices={device.voices.synth}
+                drumVoices={device.voices.drums}
+                protoVer={device.protoVer}
+              />
             </div>
-            <div className="p-4 max-h-48 overflow-y-auto font-mono text-xs space-y-1">
-              {debugMessages.map((msg, i) => (
-                <div key={i} className="flex gap-2">
-                  <span className="text-groove-muted opacity-50">
-                    {new Date(msg.timestamp).toLocaleTimeString()}
-                  </span>
-                  <span className="text-groove-yellow">{msg.text}</span>
+
+            {/* Hardware CC mirror: bank + fader pickup state */}
+            <CCControlPanel
+              currentBank={device.bank as Bank}
+              faderStates={device.faderStates}
+              mixerState={device.engineMix}
+              synthParams={device.synthParams}
+              onBankChange={handleBankChange}
+              connected={connected}
+            />
+
+            {debugMessages.length > 0 && (
+              <div className="bg-groove-panel border border-groove-border rounded-lg">
+                <div className="px-4 py-3 border-b border-groove-border flex items-center justify-between">
+                  <h2 className="font-semibold text-groove-text">Debug Messages</h2>
+                  <button
+                    onClick={() => setDebugMessages([])}
+                    className="text-xs text-groove-muted hover:text-groove-text"
+                  >
+                    Clear
+                  </button>
                 </div>
-              ))}
+                <div className="p-4 max-h-48 overflow-y-auto font-mono text-xs space-y-1">
+                  {debugMessages.map((msg, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="text-groove-muted opacity-50">
+                        {new Date(msg.timestamp).toLocaleTimeString()}
+                      </span>
+                      <span className="text-groove-yellow">{msg.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="bg-groove-panel border border-groove-border rounded-lg">
+              <button
+                onClick={() => setShowRawLog(!showRawLog)}
+                className="w-full px-4 py-2 text-left text-groove-muted hover:text-groove-text transition-colors flex items-center gap-2"
+              >
+                <span
+                  className={`transform transition-transform ${showRawLog ? 'rotate-90' : ''}`}
+                >
+                  ▶
+                </span>
+                Raw Log
+              </button>
+              {showRawLog && <RawLog logs={logs} />}
             </div>
           </div>
         )}
       </main>
-
-      {/* Footer - Raw Log Toggle */}
-      <footer className="border-t border-groove-border">
-        <button
-          onClick={() => setShowRawLog(!showRawLog)}
-          className="w-full px-4 py-2 text-left text-groove-muted hover:text-groove-text hover:bg-groove-panel transition-colors flex items-center gap-2"
-        >
-          <span className={`transform transition-transform ${showRawLog ? 'rotate-90' : ''}`}>
-            ▶
-          </span>
-          Raw Log
-        </button>
-        {showRawLog && <RawLog logs={logs} />}
-      </footer>
     </div>
   )
 }

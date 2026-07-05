@@ -24,8 +24,11 @@ import {
   MSG_TRACK,
   MSG_TRACK_GONE,
   MSG_CAPTURE,
+  MSG_TRACK_DATA,
+  MSG_SRC_ACTIVITY,
   type ParsedMessage,
   type SynthParams,
+  type TrackEvent,
   getDefaultSynthParams,
 } from './protocol'
 import { type MixerState, getDefaultMixerState } from './ccMappings'
@@ -74,6 +77,22 @@ export interface CaptureFlash {
   atMs: number
 }
 
+/** Assembled (possibly still partial) note content of a track. */
+export interface TrackData {
+  gen: number
+  chunkCount: number
+  chunksSeen: number
+  events: TrackEvent[]
+}
+
+/** Rolling-buffer visibility per capture source. */
+export interface SrcActivity {
+  padsBarsBanked: number
+  padsActive: boolean
+  keysBarsBanked: number
+  keysActive: boolean
+}
+
 export interface DeviceState {
   protoVer: number | null // null until MSG_HELLO seen
   transport: TransportState
@@ -88,7 +107,9 @@ export interface DeviceState {
   metro: { on: boolean; level: number }
   lastError: DeviceError | null
   tracks: Record<number, TrackState> // keyed by slot
+  trackData: Record<number, TrackData> // keyed by slot
   captureFlash: CaptureFlash | null
+  srcActivity: SrcActivity
 }
 
 function defaultStrip(level = 101): StripState {
@@ -115,7 +136,14 @@ export function getInitialDeviceState(): DeviceState {
     metro: { on: true, level: 64 },
     lastError: null,
     tracks: {},
+    trackData: {},
     captureFlash: null,
+    srcActivity: {
+      padsBarsBanked: 0,
+      padsActive: false,
+      keysBarsBanked: 0,
+      keysActive: false,
+    },
   }
 }
 
@@ -223,8 +251,42 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
       }
       const tracks = { ...state.tracks }
       delete tracks[msg.slot]
-      return { ...state, tracks }
+      const trackData = { ...state.trackData }
+      delete trackData[msg.slot]
+      return { ...state, tracks, trackData }
     }
+
+    case MSG_TRACK_DATA: {
+      const prev = state.trackData[msg.slot]
+      // First chunk of a (new) generation starts a fresh assembly
+      const base: TrackData =
+        prev && prev.gen === msg.gen && prev.chunkCount === msg.chunkCount
+          ? prev
+          : { gen: msg.gen, chunkCount: msg.chunkCount, chunksSeen: 0, events: [] }
+      return {
+        ...state,
+        trackData: {
+          ...state.trackData,
+          [msg.slot]: {
+            ...base,
+            chunksSeen: base.chunksSeen + 1,
+            // chunks arrive in order (single serial stream); append
+            events: [...base.events, ...msg.events],
+          },
+        },
+      }
+    }
+
+    case MSG_SRC_ACTIVITY:
+      return {
+        ...state,
+        srcActivity: {
+          padsBarsBanked: msg.padsBarsBanked,
+          padsActive: msg.padsActive,
+          keysBarsBanked: msg.keysBarsBanked,
+          keysActive: msg.keysActive,
+        },
+      }
 
     case MSG_CAPTURE:
       return {

@@ -90,6 +90,14 @@ constexpr uint8_t MSG_TRACK       = 0x10;
 constexpr uint8_t MSG_TRACK_GONE  = 0x11;
 // MSG_CAPTURE: [status][source][bars][slot][gen][reason]
 constexpr uint8_t MSG_CAPTURE     = 0x12;
+// MSG_TRACK_DATA: [slot][gen][chunk_idx][chunk_count][ev0..evN]
+//   event = [tick_lo][tick_hi][status][d1][d2] (5 bytes, tick = loop pos)
+//   Sent after MSG_TRACK on commit/snapshot; drives arrange-lane rendering
+constexpr uint8_t MSG_TRACK_DATA  = 0x13;
+// MSG_SRC_ACTIVITY: [pads_bars_banked][pads_active][keys_bars_banked]
+//   [keys_active] — rolling-buffer visibility for capture history rings,
+//   ~4 Hz while playing
+constexpr uint8_t MSG_SRC_ACTIVITY = 0x14;
 constexpr uint8_t MSG_DEBUG       = 0xFF;
 
 // MSG_MIXER/CMD_MIXER strip id for the master bus
@@ -114,6 +122,7 @@ constexpr uint8_t CMD_CAPTURE      = 0xA0; // [source (SRC_ANY=all active)][bars
 constexpr uint8_t CMD_UNDO         = 0xA1; // [] — delete newest capture
 constexpr uint8_t CMD_TRACK_DELETE = 0xA2; // [slot][gen] — hold-gesture in UIs
 constexpr uint8_t CMD_SRC_LEN      = 0xA3; // [source][bars 1/2/4/8]
+constexpr uint8_t CMD_REQ_TRACK_DATA = 0xA5; // [slot][gen]
 
 // Capture sources
 constexpr uint8_t SRC_PADS   = 0;

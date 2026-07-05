@@ -314,6 +314,7 @@ void SendFaderState()
 
 void SendEngineMix();
 void SendTrack(int slot);
+void SendTrackData(int slot);
 
 /** Full snapshot: everything the companion needs to cold-join. */
 void SendSnapshot()
@@ -338,6 +339,7 @@ void SendSnapshot()
         if(registry.Get(i).active.load())
         {
             SendTrack(i);
+            SendTrackData(i);
         }
     }
 }
@@ -405,6 +407,78 @@ void SendCaptureMsg(uint8_t status, uint8_t source, uint8_t bars,
     ui.Send(Protocol::MSG_CAPTURE, p, 6);
 }
 
+// Chunked note dump so the arrange view can draw what was captured.
+// 5 bytes/event, 50 events/chunk fits MAX_PAYLOAD with the 4-byte header.
+void SendTrackData(int slot)
+{
+    const Track::Slot& s = registry.Get(slot);
+    constexpr uint16_t EVENTS_PER_CHUNK = 50;
+    uint8_t chunk_count
+        = (uint8_t)((s.event_count + EVENTS_PER_CHUNK - 1) / EVENTS_PER_CHUNK);
+    if(chunk_count == 0)
+        chunk_count = 1; // empty track still announces itself
+
+    for(uint8_t c = 0; c < chunk_count; c++)
+    {
+        uint8_t  payload[4 + EVENTS_PER_CHUNK * 5];
+        size_t   idx   = 0;
+        payload[idx++] = (uint8_t)slot;
+        payload[idx++] = s.gen;
+        payload[idx++] = c;
+        payload[idx++] = chunk_count;
+
+        uint16_t start = c * EVENTS_PER_CHUNK;
+        uint16_t end   = start + EVENTS_PER_CHUNK;
+        if(end > s.event_count)
+            end = s.event_count;
+        for(uint16_t i = start; i < end; i++)
+        {
+            const Track::MidiEv& ev = s.events[i];
+            payload[idx++]          = ev.tick & 0xFF;
+            payload[idx++]          = (ev.tick >> 8) & 0xFF;
+            payload[idx++]          = ev.status;
+            payload[idx++]          = ev.d1;
+            payload[idx++]          = ev.d2;
+        }
+        ui.Send(Protocol::MSG_TRACK_DATA, payload, (uint16_t)idx);
+    }
+}
+
+// Rolling-buffer visibility: how many bars back a capture could reach,
+// and whether the source played within the last beat.
+static uint8_t RingSpanBars(const Capture::MidiRing& ring)
+{
+    uint32_t head = ring.Head();
+    if(head == 0 || !clk.Playing())
+        return 0;
+    uint32_t first = head > Capture::RING_EVENTS
+                         ? head - Capture::RING_EVENTS
+                         : 0;
+    uint32_t oldest = ring.At(first).tick;
+    uint32_t now    = clk.NowTick();
+    if(now <= oldest)
+        return 0;
+    uint32_t bars = (now - oldest) / Clock::TICKS_PER_BAR;
+    return bars > Capture::MAX_BARS ? Capture::MAX_BARS : (uint8_t)bars;
+}
+
+static uint8_t RingActive(const Capture::MidiRing& ring)
+{
+    uint32_t head = ring.Head();
+    if(head == 0)
+        return 0;
+    uint32_t last = ring.At(head - 1).tick;
+    uint32_t now  = clk.NowTick();
+    return (now >= last && now - last < Clock::PPQN) ? 1 : 0;
+}
+
+void SendSrcActivity()
+{
+    uint8_t p[4] = {RingSpanBars(pads_ring), RingActive(pads_ring),
+                    RingSpanBars(keys_ring), RingActive(keys_ring)};
+    ui.Send(Protocol::MSG_SRC_ACTIVITY, p, 4);
+}
+
 static uint8_t SnapBars(uint8_t bars)
 {
     // Loop lengths are 1/2/4/8 (SPEC.md track model)
@@ -455,6 +529,7 @@ void CommitCapture(uint8_t source, uint8_t bars, uint32_t end_tick,
     mixer.Get(slot).Reset(0.8f);
     registry.Activate(slot);
     SendTrack(slot);
+    SendTrackData(slot);
     SendCaptureMsg(Protocol::CAP_COMMITTED, source, bars, (uint8_t)slot,
                    s.gen, 0);
 }
@@ -524,6 +599,19 @@ void PollPendingCaptures()
                           pending_cap[src].end_tick, pending_silent[src]);
         }
     }
+}
+
+void DoRewind()
+{
+    clk.Rewind();
+    synth.AllNotesOff();
+    // The rings hold events stamped with pre-rewind (higher) ticks; once
+    // the clock passes those values again they would bleed into capture
+    // windows as ghosts from the previous pass. Flush on every rewind.
+    pads_ring.Reset();
+    keys_ring.Reset();
+    pending_cap[Protocol::SRC_PADS].armed = false;
+    pending_cap[Protocol::SRC_KEYS].armed = false;
 }
 
 void DoUndo()
@@ -703,8 +791,7 @@ void ProcessCommand()
             break;
 
         case Protocol::CMD_REWIND:
-            clk.Rewind();
-            synth.AllNotesOff();
+            DoRewind();
             SendTransport();
             ui.Sync(clk.NowTick());
             break;
@@ -859,6 +946,19 @@ void ProcessCommand()
             }
             break;
 
+        case Protocol::CMD_REQ_TRACK_DATA:
+            if(parser.payload_len >= 2)
+            {
+                uint8_t slot = parser.payload[0];
+                if(slot < Track::MAX_TRACKS
+                   && registry.Get(slot).active.load()
+                   && registry.Get(slot).gen == parser.payload[1])
+                {
+                    SendTrackData(slot);
+                }
+            }
+            break;
+
         default:
             break;
     }
@@ -969,7 +1069,7 @@ int main(void)
             }
             else if(now - last_stop_time < 500)
             {
-                clk.Rewind();
+                DoRewind();
                 ui.Sync(clk.NowTick());
             }
             else
@@ -1017,6 +1117,14 @@ int main(void)
         {
             last_sync_send = now;
             ui.Sync(clk.NowTick());
+        }
+
+        // Rolling-buffer visibility for the capture history rings (~4 Hz)
+        static uint32_t last_activity_send = 0;
+        if(clk.Playing() && now - last_activity_send >= 250)
+        {
+            last_activity_send = now;
+            SendSrcActivity();
         }
 
         // Voice activity on change

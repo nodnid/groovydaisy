@@ -29,6 +29,8 @@ export const MSG_ENGINE_MIX = 0x0d
 export const MSG_TRACK = 0x10
 export const MSG_TRACK_GONE = 0x11
 export const MSG_CAPTURE = 0x12
+export const MSG_TRACK_DATA = 0x13
+export const MSG_SRC_ACTIVITY = 0x14
 export const MSG_DEBUG = 0xff
 
 // Message types: Companion -> Daisy
@@ -48,6 +50,7 @@ export const CMD_CAPTURE = 0xa0
 export const CMD_UNDO = 0xa1
 export const CMD_TRACK_DELETE = 0xa2
 export const CMD_SRC_LEN = 0xa3
+export const CMD_REQ_TRACK_DATA = 0xa5
 
 // Capture sources
 export const SRC_PADS = 0
@@ -245,6 +248,30 @@ export interface CaptureMessage {
   reason: number // ERR_* when refused
 }
 
+export interface TrackEvent {
+  tick: number // loop position, 0..lengthTicks-1
+  status: number
+  d1: number
+  d2: number
+}
+
+export interface TrackDataMessage {
+  type: typeof MSG_TRACK_DATA
+  slot: number
+  gen: number
+  chunkIdx: number
+  chunkCount: number
+  events: TrackEvent[]
+}
+
+export interface SrcActivityMessage {
+  type: typeof MSG_SRC_ACTIVITY
+  padsBarsBanked: number
+  padsActive: boolean
+  keysBarsBanked: number
+  keysActive: boolean
+}
+
 // Synth parameters - mirrors SynthParams struct in synth.h
 export interface SynthParams {
   osc1Wave: number
@@ -296,6 +323,8 @@ export type ParsedMessage =
   | TrackMessage
   | TrackGoneMessage
   | CaptureMessage
+  | TrackDataMessage
+  | SrcActivityMessage
 
 // Parser state
 enum ParserState {
@@ -413,6 +442,10 @@ export function buildTrackDeleteCommand(slot: number, gen: number): Uint8Array {
 
 export function buildSrcLenCommand(source: number, bars: number): Uint8Array {
   return buildMessage(CMD_SRC_LEN, new Uint8Array([source, bars]))
+}
+
+export function buildReqTrackDataCommand(slot: number, gen: number): Uint8Array {
+  return buildMessage(CMD_REQ_TRACK_DATA, new Uint8Array([slot, gen]))
 }
 
 /**
@@ -662,6 +695,40 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
       }
       break
 
+    case MSG_TRACK_DATA:
+      if (payload.length >= 4) {
+        const events: TrackEvent[] = []
+        for (let i = 4; i + 5 <= payload.length; i += 5) {
+          events.push({
+            tick: payload[i] | (payload[i + 1] << 8),
+            status: payload[i + 2],
+            d1: payload[i + 3],
+            d2: payload[i + 4],
+          })
+        }
+        return {
+          type: MSG_TRACK_DATA,
+          slot: payload[0],
+          gen: payload[1],
+          chunkIdx: payload[2],
+          chunkCount: payload[3],
+          events,
+        }
+      }
+      break
+
+    case MSG_SRC_ACTIVITY:
+      if (payload.length >= 4) {
+        return {
+          type: MSG_SRC_ACTIVITY,
+          padsBarsBanked: payload[0],
+          padsActive: payload[1] !== 0,
+          keysBarsBanked: payload[2],
+          keysActive: payload[3] !== 0,
+        }
+      }
+      break
+
     case MSG_ENGINE_MIX:
       // [drum_levels:8][drum_pans:8][drum_master][synth_level][synth_pan][synth_master][master_out]
       if (payload.length >= 21) {
@@ -828,6 +895,10 @@ export function getMessageTypeName(type: number): string {
       return 'TRACK_GONE'
     case MSG_CAPTURE:
       return 'CAPTURE'
+    case MSG_TRACK_DATA:
+      return 'TRACK_DATA'
+    case MSG_SRC_ACTIVITY:
+      return 'SRC_ACTIVITY'
     case MSG_DEBUG:
       return 'DEBUG'
     default:

@@ -205,7 +205,10 @@ void UsbReceiveCallback(uint8_t* buf, uint32_t* len)
 
 void UsbSendRaw(const uint8_t* data, size_t len)
 {
+    // Mirror all traffic to both ports; the unconnected one returns
+    // busy/fail immediately (no blocking) and costs nothing.
     hw.seed.usb_handle.TransmitInternal((uint8_t*)data, len);
+    hw.seed.usb_handle.TransmitExternal((uint8_t*)data, len);
 }
 
 // ---------------------------------------------------------------------------
@@ -859,10 +862,13 @@ int main(void)
     fpscr |= (1 << 24);
     __set_FPSCR(fpscr);
 
-    // USB CDC
-    hw.seed.usb_handle.Init(UsbHandle::FS_INTERNAL);
+    // USB CDC on BOTH ports: the Seed's onboard micro-USB (FS_INTERNAL)
+    // and the Pod's own micro-USB connector, which is wired to the Seed's
+    // external USB pins 37/38 (FS_EXTERNAL). Companion can connect to
+    // either; power can come from either.
+    hw.seed.usb_handle.Init(UsbHandle::FS_BOTH);
     hw.seed.usb_handle.SetReceiveCallback(UsbReceiveCallback,
-                                          UsbHandle::FS_INTERNAL);
+                                          UsbHandle::FS_BOTH);
 
     // SDRAM regions: libDaisy does NOT zero these. The sample bank is
     // fully written by Generate(); ring/pool/fx are zeroed on first use by

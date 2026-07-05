@@ -203,12 +203,27 @@ void UsbReceiveCallback(uint8_t* buf, uint32_t* len)
     }
 }
 
+// libDaisy's CDC_Transmit_FS/HS dereference the CDC class pointer with NO
+// null check (usbd_cdc_if.c), and that pointer only exists while a host
+// has the port CONFIGURED. Transmitting on an unplugged/unconfigured port
+// is a null-deref -> hard fault -> audio DMA loops its last buffer as a
+// constant tone. Guard on dev_state before every transmit.
+#include "usbd_def.h"
+extern "C" {
+extern USBD_HandleTypeDef hUsbDeviceFS; // Seed onboard port (FS_INTERNAL)
+extern USBD_HandleTypeDef hUsbDeviceHS; // Pod port, ext pins (FS_EXTERNAL)
+}
+
 void UsbSendRaw(const uint8_t* data, size_t len)
 {
-    // Mirror all traffic to both ports; the unconnected one returns
-    // busy/fail immediately (no blocking) and costs nothing.
-    hw.seed.usb_handle.TransmitInternal((uint8_t*)data, len);
-    hw.seed.usb_handle.TransmitExternal((uint8_t*)data, len);
+    if(hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED)
+    {
+        hw.seed.usb_handle.TransmitInternal((uint8_t*)data, len);
+    }
+    if(hUsbDeviceHS.dev_state == USBD_STATE_CONFIGURED)
+    {
+        hw.seed.usb_handle.TransmitExternal((uint8_t*)data, len);
+    }
 }
 
 // ---------------------------------------------------------------------------

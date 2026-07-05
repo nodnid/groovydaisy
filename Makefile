@@ -14,8 +14,14 @@ APP_TYPE = BOOT_QSPI
 CPP_SOURCES = src/main.cpp
 
 # Library Locations (override with `make LIBDAISY_DIR=...` if yours live elsewhere)
-LIBDAISY_DIR ?= ../DaisyExamples/libDaisy
-DAISYSP_DIR ?= ../DaisyExamples/DaisySP
+#
+# PINNED to the libDaisy v5.4.0 checkout ("DaisyExamples 2", via the
+# ~/Desktop/DaisyExamples2 symlink — make can't handle the space).
+# libDaisy v7.x swapped the ST USB device middleware to submodules and its
+# CDC never completes enumeration on macOS 14.5 (device visible, no
+# /dev/cu.usbmodem created). Verified by A/B flashing 2026-07-05.
+LIBDAISY_DIR ?= ../DaisyExamples2/libDaisy
+DAISYSP_DIR ?= ../DaisyExamples2/DaisySP
 
 # Project includes
 C_INCLUDES += -Isrc

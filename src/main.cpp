@@ -877,6 +877,19 @@ int main(void)
     fpscr |= (1 << 24);
     __set_FPSCR(fpscr);
 
+    // The Daisy bootloader ran its own USB DFU on this peripheral moments
+    // before jumping here. On macOS the leftover core state made CDC
+    // enumeration wedge half-way (descriptors readable, configuration
+    // never completing, no serial device created). Force both USB cores
+    // through a full RCC reset so CDC init starts from silicon-clean
+    // state.
+    __HAL_RCC_USB1_OTG_HS_FORCE_RESET();
+    __HAL_RCC_USB2_OTG_FS_FORCE_RESET();
+    System::Delay(10);
+    __HAL_RCC_USB1_OTG_HS_RELEASE_RESET();
+    __HAL_RCC_USB2_OTG_FS_RELEASE_RESET();
+    System::Delay(10);
+
     // USB CDC on BOTH ports: the Seed's onboard micro-USB (FS_INTERNAL)
     // and the Pod's own micro-USB connector, which is wired to the Seed's
     // external USB pins 37/38 (FS_EXTERNAL). Companion can connect to

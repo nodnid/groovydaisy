@@ -2,8 +2,18 @@
 
 Compiled 2026-07 from official Electrosmith sources (docs.daisy.audio, product
 datasheets/schematics, libDaisy source). Facts marked **[UNVERIFIED]** could
-not be confirmed from an official source. Local note: our libDaisy checkout
-(`../DaisyExamples/libDaisy`) ships bootloader **v6_3** binaries.
+not be confirmed from an official source.
+
+**Local toolchain warning (verified by A/B test 2026-07-05):** libDaisy
+**v7.x** (checkout `~/Desktop/DaisyExamples/libDaisy`, Sep 2025) swapped the
+ST USB device middleware to submodules, and its **CDC never completes
+enumeration on macOS 14.5** — the device appears in `system_profiler` but no
+interfaces are published and no `/dev/cu.usbmodem*` node is created, so
+WebSerial sees nothing. The build is pinned to **libDaisy v5.4.0**
+(`~/Desktop/DaisyExamples 2/libDaisy`, via the space-free symlink
+`~/Desktop/DaisyExamples2`), whose CDC enumerates both ports instantly.
+That older checkout ships bootloader **v6_3** binaries; the installed
+bootloader (v6_3) is compatible with both.
 
 ## 1. Daisy Seed — Core Hardware
 

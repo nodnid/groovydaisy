@@ -511,7 +511,9 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
 
     case MSG_SYNTH_STATE:
       // Parse synth state - must match SendSynthState() order in src/main.cpp
-      if (payload.length >= 60) {
+      // Full payload is 68 bytes; a looser check would let a truncated
+      // frame read past the buffer (fix recovered from v1-history 83f9864)
+      if (payload.length >= 68) {
         let idx = 0
 
         const params: SynthParams = {

@@ -85,5 +85,10 @@ Hard rules for firmware code:
 
 ## Status
 
-v2 rewrite Phase 0 complete (git + restructure + host tests).
-Implementation follows the 7-phase plan; see SPEC.md for the design.
+v2 rewrite: Phases 0–2.5 complete and hardware-verified (2026-07-05) —
+live instrument core, retrospective MIDI capture with undo, arrange-first
+tabbed UI with count-in/circular time/history rings, dual-port USB with a
+per-port-cursor TX queue. Next: Phase 3, the guitar audio looper (granule
+pool, capture ring, tempo lock). See SPEC.md for the design and
+daisy_hardware.md for the hardware/toolchain gotchas (libDaisy pinned to
+v5.4.0 — v7 breaks USB CDC on macOS).

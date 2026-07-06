@@ -26,6 +26,8 @@ import {
   MSG_CAPTURE,
   MSG_TRACK_DATA,
   MSG_SRC_ACTIVITY,
+  MSG_AUDIO_PEAKS,
+  MSG_POOL,
   type ParsedMessage,
   type SynthParams,
   type TrackEvent,
@@ -95,6 +97,20 @@ export interface SrcActivity {
   padsActive: boolean
   keysBarsBanked: number
   keysActive: boolean
+  guitarBarsBanked: number
+  guitarActive: boolean
+}
+
+/** Waveform buckets for an audio track's lane. */
+export interface AudioPeaks {
+  gen: number
+  peaks: number[]
+}
+
+/** Audio memory gauge; barsTotal 0 = unlocked (no audio loops). */
+export interface PoolState {
+  barsFree: number
+  barsTotal: number
 }
 
 export interface DeviceState {
@@ -112,6 +128,8 @@ export interface DeviceState {
   lastError: DeviceError | null
   tracks: Record<number, TrackState> // keyed by slot
   trackData: Record<number, TrackData> // keyed by slot
+  audioPeaks: Record<number, AudioPeaks> // keyed by slot (audio tracks)
+  pool: PoolState
   captureFlash: CaptureFlash | null
   srcActivity: SrcActivity
 }
@@ -141,12 +159,16 @@ export function getInitialDeviceState(): DeviceState {
     lastError: null,
     tracks: {},
     trackData: {},
+    audioPeaks: {},
+    pool: { barsFree: 0, barsTotal: 0 },
     captureFlash: null,
     srcActivity: {
       padsBarsBanked: 0,
       padsActive: false,
       keysBarsBanked: 0,
       keysActive: false,
+      guitarBarsBanked: 0,
+      guitarActive: false,
     },
   }
 }
@@ -258,8 +280,25 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
       delete tracks[msg.slot]
       const trackData = { ...state.trackData }
       delete trackData[msg.slot]
-      return { ...state, tracks, trackData }
+      const audioPeaks = { ...state.audioPeaks }
+      delete audioPeaks[msg.slot]
+      return { ...state, tracks, trackData, audioPeaks }
     }
+
+    case MSG_AUDIO_PEAKS:
+      return {
+        ...state,
+        audioPeaks: {
+          ...state.audioPeaks,
+          [msg.slot]: { gen: msg.gen, peaks: msg.peaks },
+        },
+      }
+
+    case MSG_POOL:
+      return {
+        ...state,
+        pool: { barsFree: msg.barsFree, barsTotal: msg.barsTotal },
+      }
 
     case MSG_TRACK_DATA: {
       const prev = state.trackData[msg.slot]
@@ -298,6 +337,8 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
           padsActive: msg.padsActive,
           keysBarsBanked: msg.keysBarsBanked,
           keysActive: msg.keysActive,
+          guitarBarsBanked: msg.guitarBarsBanked,
+          guitarActive: msg.guitarActive,
         },
       }
 

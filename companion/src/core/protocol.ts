@@ -31,6 +31,8 @@ export const MSG_TRACK_GONE = 0x11
 export const MSG_CAPTURE = 0x12
 export const MSG_TRACK_DATA = 0x13
 export const MSG_SRC_ACTIVITY = 0x14
+export const MSG_AUDIO_PEAKS = 0x15
+export const MSG_POOL = 0x20
 export const MSG_DEBUG = 0xff
 
 // Message types: Companion -> Daisy
@@ -271,6 +273,21 @@ export interface SrcActivityMessage {
   padsActive: boolean
   keysBarsBanked: number
   keysActive: boolean
+  guitarBarsBanked: number
+  guitarActive: boolean
+}
+
+export interface AudioPeaksMessage {
+  type: typeof MSG_AUDIO_PEAKS
+  slot: number
+  gen: number
+  peaks: number[] // u8 waveform buckets, 24/bar, loop-position order
+}
+
+export interface PoolMessage {
+  type: typeof MSG_POOL
+  barsFree: number
+  barsTotal: number // 0 = pool unlocked (no audio loops, tempo free)
 }
 
 // Synth parameters - mirrors SynthParams struct in synth.h
@@ -326,6 +343,8 @@ export type ParsedMessage =
   | CaptureMessage
   | TrackDataMessage
   | SrcActivityMessage
+  | AudioPeaksMessage
+  | PoolMessage
 
 // Parser state
 enum ParserState {
@@ -727,6 +746,30 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
           padsActive: payload[1] !== 0,
           keysBarsBanked: payload[2],
           keysActive: payload[3] !== 0,
+          guitarBarsBanked: payload.length >= 6 ? payload[4] : 0,
+          guitarActive: payload.length >= 6 ? payload[5] !== 0 : false,
+        }
+      }
+      break
+
+    case MSG_AUDIO_PEAKS:
+      if (payload.length >= 4) {
+        const count = payload[2] | (payload[3] << 8)
+        return {
+          type: MSG_AUDIO_PEAKS,
+          slot: payload[0],
+          gen: payload[1],
+          peaks: Array.from(payload.slice(4, 4 + count)),
+        }
+      }
+      break
+
+    case MSG_POOL:
+      if (payload.length >= 4) {
+        return {
+          type: MSG_POOL,
+          barsFree: payload[0] | (payload[1] << 8),
+          barsTotal: payload[2] | (payload[3] << 8),
         }
       }
       break
@@ -901,6 +944,10 @@ export function getMessageTypeName(type: number): string {
       return 'TRACK_DATA'
     case MSG_SRC_ACTIVITY:
       return 'SRC_ACTIVITY'
+    case MSG_AUDIO_PEAKS:
+      return 'AUDIO_PEAKS'
+    case MSG_POOL:
+      return 'POOL'
     case MSG_DEBUG:
       return 'DEBUG'
     default:

@@ -1,7 +1,8 @@
-import type { CaptureFlash, SrcActivity } from '../../core/state'
+import type { CaptureFlash, SrcActivity, PoolState } from '../../core/state'
 import {
   SRC_PADS,
   SRC_KEYS,
+  SRC_GUITAR,
   SOURCE_NAMES,
   CAP_PENDING,
   CAP_COMMITTED,
@@ -15,10 +16,14 @@ const MAX_BANKED = 8
 interface CaptureStripProps {
   activity: SrcActivity
   captureFlash: CaptureFlash | null
+  pool: PoolState
+  tempoLocked: boolean
   padBars: number
   keyBars: number
+  guitarBars: number
   onPadBars: (bars: number) => void
   onKeyBars: (bars: number) => void
+  onGuitarBars: (bars: number) => void
   onCapture: (source: number, bars: number) => void
   onUndo: () => void
   playing: boolean
@@ -89,10 +94,14 @@ function HistoryRing({
 export default function CaptureStrip({
   activity,
   captureFlash,
+  pool,
+  tempoLocked,
   padBars,
   keyBars,
+  guitarBars,
   onPadBars,
   onKeyBars,
+  onGuitarBars,
   onCapture,
   onUndo,
   playing,
@@ -166,6 +175,27 @@ export default function CaptureStrip({
                 activity.padsActive, padBars, onPadBars)}
         {srcRow(SRC_KEYS, 'Grab Keys', '#58a6ff', activity.keysBarsBanked,
                 activity.keysActive, keyBars, onKeyBars)}
+        {srcRow(SRC_GUITAR, 'Grab Guitar', '#d29922',
+                activity.guitarBarsBanked, activity.guitarActive,
+                guitarBars, onGuitarBars)}
+
+        {/* Audio memory gauge: only meaningful once the pool is locked */}
+        {pool.barsTotal > 0 && (
+          <div
+            className="flex flex-col items-center text-xs"
+            title={
+              tempoLocked
+                ? 'Audio loop memory — tempo is locked while audio loops exist'
+                : 'Audio loop memory'
+            }
+          >
+            <span className="font-mono text-groove-text">
+              {pool.barsFree}
+              <span className="text-groove-muted">/{pool.barsTotal}</span>
+            </span>
+            <span className="text-groove-muted">bars free 🔒</span>
+          </div>
+        )}
 
         <div className="ml-auto flex items-center gap-3">
           {flashText && (

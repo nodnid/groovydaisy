@@ -94,10 +94,16 @@ constexpr uint8_t MSG_CAPTURE     = 0x12;
 //   event = [tick_lo][tick_hi][status][d1][d2] (5 bytes, tick = loop pos)
 //   Sent after MSG_TRACK on commit/snapshot; drives arrange-lane rendering
 constexpr uint8_t MSG_TRACK_DATA  = 0x13;
-// MSG_SRC_ACTIVITY: [pads_bars_banked][pads_active][keys_bars_banked]
-//   [keys_active] — rolling-buffer visibility for capture history rings,
-//   ~4 Hz while playing
+// MSG_SRC_ACTIVITY: [pads_bars][pads_active][keys_bars][keys_active]
+//   [guitar_bars][guitar_active] — rolling-buffer visibility for the
+//   capture history rings, ~4 Hz while playing
 constexpr uint8_t MSG_SRC_ACTIVITY = 0x14;
+// MSG_AUDIO_PEAKS: [slot][gen][count:2][u8 peaks...] — waveform buckets
+//   (24/bar, loop-position order) for audio lanes; sent on commit/snapshot
+constexpr uint8_t MSG_AUDIO_PEAKS = 0x15;
+// MSG_POOL: [bars_free:2][bars_total:2] — audio memory gauge; total==0
+//   means the pool is unlocked (no audio loops, tempo free)
+constexpr uint8_t MSG_POOL        = 0x20;
 constexpr uint8_t MSG_DEBUG       = 0xFF;
 
 // MSG_MIXER/CMD_MIXER strip id for the master bus

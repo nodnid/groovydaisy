@@ -11,8 +11,10 @@ interface ArrangeViewProps {
   device: DeviceState
   padBars: number
   keyBars: number
+  guitarBars: number
   onPadBars: (bars: number) => void
   onKeyBars: (bars: number) => void
+  onGuitarBars: (bars: number) => void
   onCapture: (source: number, bars: number) => void
   onUndo: () => void
   onMute: (slot: number, mute: boolean) => void
@@ -30,8 +32,10 @@ export default function ArrangeView({
   device,
   padBars,
   keyBars,
+  guitarBars,
   onPadBars,
   onKeyBars,
+  onGuitarBars,
   onCapture,
   onUndo,
   onMute,
@@ -67,10 +71,14 @@ export default function ArrangeView({
       <CaptureStrip
         activity={device.srcActivity}
         captureFlash={device.captureFlash}
+        pool={device.pool}
+        tempoLocked={device.transport.tempoLocked}
         padBars={padBars}
         keyBars={keyBars}
+        guitarBars={guitarBars}
         onPadBars={onPadBars}
         onKeyBars={onKeyBars}
+        onGuitarBars={onGuitarBars}
         onCapture={onCapture}
         onUndo={onUndo}
         playing={device.transport.playing}
@@ -95,6 +103,7 @@ export default function ArrangeView({
               key={`${t.slot}-${t.gen}`}
               track={t}
               data={device.trackData[t.slot]}
+              peaks={device.audioPeaks[t.slot]}
               strip={device.strips[t.slot]}
               nowTick={nowTick}
               playing={device.transport.playing}

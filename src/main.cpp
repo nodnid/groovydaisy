@@ -31,6 +31,7 @@
 #include "midi_router.h"
 #include "track.h"
 #include "capture.h"
+#include "audio_track.h"
 #include "seq_track.h"
 #include "ui_link.h"
 #include "samples/drums.h"
@@ -57,9 +58,23 @@ CpuLoadMeter       cpu_meter;
 Track::Registry  registry;
 Capture::MidiRing pads_ring;
 Capture::MidiRing keys_ring;
-Capture::Pending  pending_cap[2];          // indexed by SRC_PADS / SRC_KEYS
-bool              pending_silent[2];        // SRC_ANY captures skip ERR_EMPTY
+Capture::Pending  pending_cap[3];    // SRC_PADS / SRC_KEYS / SRC_GUITAR
+bool              pending_silent[3]; // SRC_ANY captures skip ERR_EMPTY
 uint8_t           src_len_preset[3] = {4, 4, 4}; // bars per source
+
+// Phase 3: the guitar — rolling audio ring + granule pool + copy engine
+Capture::AudioRing     audio_ring;
+AudioTrack::GranulePool pool;
+AudioTrack::CopyJob     copy_job;
+int                     copy_slot = -1; // reserved slot awaiting copy/commit
+
+// Live-button gesture: single press (after 400 ms of silence) = grab
+// pads+keys; double press = grab guitar. Retrospective capture doesn't
+// care about the decision delay — the window is cut at the FIRST press's
+// clock position either way.
+static bool     live_armed = false;
+static uint32_t live_ms    = 0;
+static uint32_t live_tick  = 0;
 
 // ---------------------------------------------------------------------------
 // SDRAM regions — the ENTIRE 64 MB budget is declared here (SPEC.md memory
@@ -71,8 +86,9 @@ uint8_t           src_len_preset[3] = {4, 4, 4}; // bars per source
 // Drum sample bank (synthesized at boot; ~400 KB today, region grows later)
 DrumSamples::SampleBank DSY_SDRAM_BSS sample_bank;
 
-// Audio capture ring: 8 bars @ 60 BPM 4/4 = 32 s mono s16 (Phase 3)
-constexpr size_t CAPTURE_RING_SAMPLES = 32UL * 48000;
+// Audio capture ring: 9 bars @ 60 BPM 4/4 = 36 s mono s16 — one bar of
+// margin over the largest window so the CopyJob can never be lapped
+constexpr size_t CAPTURE_RING_SAMPLES = 36UL * 48000;
 int16_t DSY_SDRAM_BSS capture_ring_mem[CAPTURE_RING_SAMPLES];
 
 // Granule pool for audio loop tracks: 42 MB of mono s16 (Phase 3)
@@ -148,6 +164,21 @@ void AudioCallback(AudioHandle::InputBuffer  in,
         router.Dispatch(ev, MidiRouter::Source::Live, clk.NowTick());
     }
 
+    // Block-start scan: which slots hold audio loops this block (avoids
+    // 32 atomic loads per sample)
+    uint8_t audio_slots[Track::MAX_TRACKS];
+    int     audio_count = 0;
+    for(int s = 0; s < Track::MAX_TRACKS; s++)
+    {
+        if(registry.Get(s).active.load(std::memory_order_acquire)
+           && registry.Get(s).kind == Track::Kind::Audio)
+        {
+            audio_slots[audio_count++] = (uint8_t)s;
+        }
+    }
+
+    const bool recording_audio = clk.Playing() && !clk.InPreroll();
+
     size_t tick_i = 0;
     for(size_t i = 0; i < size; i++)
     {
@@ -170,9 +201,29 @@ void AudioCallback(AudioHandle::InputBuffer  in,
                 {
                     metro.TriggerBeat(Clock::Engine::OnBar(t));
                 }
+                if(Clock::Engine::OnBar(t))
+                {
+                    // Bar line: anchor the audio ring (exact tick<->sample
+                    // mapping for capture) and resync every audio loop to
+                    // the grid (sub-sample correction, drift-proof)
+                    audio_ring.AnchorBar(t);
+                    uint32_t gbar = t / Clock::TICKS_PER_BAR;
+                    for(int a = 0; a < audio_count; a++)
+                    {
+                        Track::Slot& s = registry.Get(audio_slots[a]);
+                        s.play_bar     = (uint8_t)(gbar % s.length_bars);
+                        s.play_gran_off = 0;
+                    }
+                }
                 SeqTrack::ProcessTick(registry, mixer, t, SeqDispatch);
             }
             tick_i++;
+        }
+
+        // The box listens: every input sample lands in the rolling ring
+        if(recording_audio)
+        {
+            audio_ring.Write(in[0][i]);
         }
 
         float sl, sr, dl, dr;
@@ -184,6 +235,24 @@ void AudioCallback(AudioHandle::InputBuffer  in,
         mixer.AddStereo(Mixer::STRIP_DRUMS, dl, dr, l, r);
         mixer.AddMono(Mixer::STRIP_METRO, metro.Process(), l, r);
         mixer.AddMono(Mixer::STRIP_GUITAR, in[0][i], l, r);
+
+        // Audio loop playback: read each active loop's current granule
+        if(clk.Playing() && !clk.InPreroll())
+        {
+            for(int a = 0; a < audio_count; a++)
+            {
+                Track::Slot& s = registry.Get(audio_slots[a]);
+                float v = pool.GranuleMem(s.chain[s.play_bar])[s.play_gran_off]
+                          * (1.0f / 32768.0f);
+                if(s.play_gran_off + 1 < s.samples_per_bar)
+                {
+                    s.play_gran_off++;
+                }
+                // else: hold until the next bar-tick resync (sub-sample)
+                mixer.AddMono(audio_slots[a], v, l, r);
+            }
+        }
+
         mixer.ApplyMaster(l, r);
 
         out[0][i] = l;
@@ -408,6 +477,8 @@ void SendFaderState()
 void SendEngineMix();
 void SendTrack(int slot);
 void SendTrackData(int slot);
+void SendPool();
+void SendAudioPeaks(int slot);
 
 /** Full snapshot: everything the companion needs to cold-join. */
 void SendSnapshot()
@@ -427,12 +498,20 @@ void SendSnapshot()
              Mixer::GainToCc(mixer.Get(Mixer::STRIP_METRO).gain));
     SendEngineMix();
     SendSynthState();
+    SendPool();
     for(int i = 0; i < Track::MAX_TRACKS; i++)
     {
         if(registry.Get(i).active.load())
         {
             SendTrack(i);
-            SendTrackData(i);
+            if(registry.Get(i).kind == Track::Kind::Audio)
+            {
+                SendAudioPeaks(i);
+            }
+            else
+            {
+                SendTrackData(i);
+            }
         }
     }
 }
@@ -566,9 +645,36 @@ static uint8_t RingActive(const Capture::MidiRing& ring)
 
 void SendSrcActivity()
 {
-    uint8_t p[4] = {RingSpanBars(pads_ring), RingActive(pads_ring),
-                    RingSpanBars(keys_ring), RingActive(keys_ring)};
-    ui.Send(Protocol::MSG_SRC_ACTIVITY, p, 4);
+    uint8_t span = RingSpanBars(pads_ring); // run-based: same for all
+    uint8_t p[6] = {span,
+                    RingActive(pads_ring),
+                    span,
+                    RingActive(keys_ring),
+                    span,
+                    (uint8_t)(audio_ring.Level() > 0.01f ? 1 : 0)};
+    ui.Send(Protocol::MSG_SRC_ACTIVITY, p, 6);
+}
+
+void SendPool()
+{
+    uint16_t free_bars  = pool.Locked() ? pool.BarsFree() : 0;
+    uint16_t total_bars = pool.Locked() ? pool.BarsTotal() : 0;
+    uint8_t  p[4] = {(uint8_t)(free_bars & 0xFF), (uint8_t)(free_bars >> 8),
+                     (uint8_t)(total_bars & 0xFF),
+                     (uint8_t)(total_bars >> 8)};
+    ui.Send(Protocol::MSG_POOL, p, 4);
+}
+
+void SendAudioPeaks(int slot)
+{
+    const Track::Slot& s = registry.Get(slot);
+    uint8_t            p[4 + sizeof(s.peaks)];
+    p[0] = (uint8_t)slot;
+    p[1] = s.gen;
+    p[2] = s.peak_count & 0xFF;
+    p[3] = (s.peak_count >> 8) & 0xFF;
+    memcpy(&p[4], s.peaks, s.peak_count);
+    ui.Send(Protocol::MSG_AUDIO_PEAKS, p, (uint16_t)(4 + s.peak_count));
 }
 
 static uint8_t SnapBars(uint8_t bars)
@@ -626,13 +732,150 @@ void CommitCapture(uint8_t source, uint8_t bars, uint32_t end_tick,
                    s.gen, 0);
 }
 
-void RequestCapture(uint8_t source, uint8_t bars_arg)
+// The tempo lock + granule pool + copy engine come together here: the
+// first committed audio capture locks the tempo and carves the pool.
+void CommitAudioCapture(uint8_t bars, uint32_t end_tick)
+{
+    if(copy_job.Active() || copy_slot >= 0)
+    {
+        SendCaptureMsg(Protocol::CAP_REFUSED, Protocol::SRC_GUITAR, bars, 0,
+                       0, Protocol::ERR_BUSY);
+        ui.Error(Protocol::ERR_BUSY, Protocol::SRC_GUITAR);
+        return;
+    }
+
+    bool first_lock = !pool.Locked();
+    if(first_lock)
+    {
+        pool.Lock(clk.SamplesPerBar());
+        clk.SetLocked(true);
+    }
+    auto rollback_lock = [&]() {
+        if(first_lock)
+        {
+            pool.Unlock();
+            clk.SetLocked(false);
+        }
+    };
+
+    uint32_t start_tick
+        = end_tick - (uint32_t)bars * Clock::TICKS_PER_BAR;
+    uint32_t ring_start = 0;
+    if(!audio_ring.FindAnchor(start_tick, ring_start))
+    {
+        rollback_lock();
+        SendCaptureMsg(Protocol::CAP_REFUSED, Protocol::SRC_GUITAR, bars, 0,
+                       0, Protocol::ERR_NO_HISTORY);
+        return;
+    }
+
+    int slot = registry.Create(Track::Kind::Audio, bars);
+    if(slot < 0)
+    {
+        rollback_lock();
+        SendCaptureMsg(Protocol::CAP_REFUSED, Protocol::SRC_GUITAR, bars, 0,
+                       0, Protocol::ERR_KIND_CAP);
+        return;
+    }
+
+    Track::Slot& s = registry.Get(slot);
+    if(!pool.Alloc(bars, s.chain))
+    {
+        registry.Abort(slot);
+        rollback_lock();
+        SendCaptureMsg(Protocol::CAP_REFUSED, Protocol::SRC_GUITAR, bars, 0,
+                       0, Protocol::ERR_POOL_FULL);
+        ui.Error(Protocol::ERR_POOL_FULL, Protocol::SRC_GUITAR);
+        return;
+    }
+
+    s.samples_per_bar = pool.SamplesPerBar();
+    copy_slot         = slot;
+    copy_job.Start(&audio_ring, &pool, s.chain, bars, start_tick,
+                   ring_start);
+    SendCaptureMsg(Protocol::CAP_PENDING, Protocol::SRC_GUITAR, bars,
+                   (uint8_t)slot, s.gen, 0);
+    if(first_lock)
+    {
+        SendTransport(); // tempo_locked went live
+    }
+    SendPool();
+}
+
+/** Main-loop pump for the ring->granules copy (~8 M samples/s). */
+void StepCopyJob()
+{
+    if(copy_slot < 0)
+    {
+        return;
+    }
+    AudioTrack::CopyResult res = copy_job.Step(8192);
+    if(res == AudioTrack::CopyResult::Working)
+    {
+        return;
+    }
+
+    Track::Slot& s = registry.Get(copy_slot);
+    if(res == AudioTrack::CopyResult::Done)
+    {
+        copy_job.GetPeaks(s.peaks, s.peak_count);
+        mixer.Get(copy_slot).Reset(0.8f);
+        registry.Activate(copy_slot);
+        SendTrack(copy_slot);
+        SendAudioPeaks(copy_slot);
+        SendCaptureMsg(Protocol::CAP_COMMITTED, Protocol::SRC_GUITAR,
+                       s.length_bars, (uint8_t)copy_slot, s.gen, 0);
+    }
+    else // Overrun: never commit garbage
+    {
+        pool.Free(s.chain, s.length_bars);
+        registry.Abort(copy_slot);
+        if(registry.CountKind(Track::Kind::Audio) == 0)
+        {
+            pool.Unlock();
+            clk.SetLocked(false);
+            SendTransport();
+        }
+        SendCaptureMsg(Protocol::CAP_REFUSED, Protocol::SRC_GUITAR,
+                       s.length_bars, 0, 0, Protocol::ERR_BUSY);
+    }
+    SendPool();
+    copy_slot = -1;
+}
+
+void RequestCaptureAt(uint8_t source, uint8_t bars_arg, uint32_t now_tick)
 {
     if(!clk.Playing())
     {
         ui.Error(Protocol::ERR_NOT_PLAYING, source);
         SendCaptureMsg(Protocol::CAP_REFUSED, source, 0, 0, 0,
                        Protocol::ERR_NOT_PLAYING);
+        return;
+    }
+
+    if(source == Protocol::SRC_GUITAR)
+    {
+        uint8_t bars = SnapBars(
+            bars_arg != 0 ? bars_arg : src_len_preset[Protocol::SRC_GUITAR]);
+        uint32_t end = Capture::WindowEndTick(now_tick);
+        if(end < (uint32_t)bars * Clock::TICKS_PER_BAR)
+        {
+            SendCaptureMsg(Protocol::CAP_REFUSED, source, bars, 0, 0,
+                           Protocol::ERR_NO_HISTORY);
+            ui.Error(Protocol::ERR_NO_HISTORY, source);
+            return;
+        }
+        if(end > clk.NowTick())
+        {
+            pending_cap[Protocol::SRC_GUITAR]
+                = {true, bars, end};
+            pending_silent[Protocol::SRC_GUITAR] = false;
+            SendCaptureMsg(Protocol::CAP_PENDING, source, bars, 0, 0, 0);
+        }
+        else
+        {
+            CommitAudioCapture(bars, end);
+        }
         return;
     }
 
@@ -644,7 +887,7 @@ void RequestCapture(uint8_t source, uint8_t bars_arg)
 
         uint8_t bars =
             SnapBars(bars_arg != 0 ? bars_arg : src_len_preset[src]);
-        uint32_t end = Capture::WindowEndTick(clk.NowTick());
+        uint32_t end = Capture::WindowEndTick(now_tick);
 
         if(end < (uint32_t)bars * Clock::TICKS_PER_BAR)
         {
@@ -672,10 +915,15 @@ void RequestCapture(uint8_t source, uint8_t bars_arg)
     }
 }
 
+void RequestCapture(uint8_t source, uint8_t bars_arg)
+{
+    RequestCaptureAt(source, bars_arg, clk.NowTick());
+}
+
 /** Main-loop poll: fire pending captures when the clock crosses them. */
 void PollPendingCaptures()
 {
-    for(uint8_t src = 0; src < 2; src++)
+    for(uint8_t src = 0; src < 3; src++)
     {
         if(!pending_cap[src].armed)
             continue;
@@ -687,8 +935,17 @@ void PollPendingCaptures()
         if(clk.NowTick() >= pending_cap[src].end_tick)
         {
             pending_cap[src].armed = false;
-            CommitCapture(src, pending_cap[src].bars,
-                          pending_cap[src].end_tick, pending_silent[src]);
+            if(src == Protocol::SRC_GUITAR)
+            {
+                CommitAudioCapture(pending_cap[src].bars,
+                                   pending_cap[src].end_tick);
+            }
+            else
+            {
+                CommitCapture(src, pending_cap[src].bars,
+                              pending_cap[src].end_tick,
+                              pending_silent[src]);
+            }
         }
     }
 }
@@ -702,8 +959,33 @@ void DoRewind()
     // windows as ghosts from the previous pass. Flush on every rewind.
     pads_ring.Reset();
     keys_ring.Reset();
-    pending_cap[Protocol::SRC_PADS].armed = false;
-    pending_cap[Protocol::SRC_KEYS].armed = false;
+    audio_ring.Reset(); // anchors reference the old timeline too
+    pending_cap[Protocol::SRC_PADS].armed   = false;
+    pending_cap[Protocol::SRC_KEYS].armed   = false;
+    pending_cap[Protocol::SRC_GUITAR].armed = false;
+    live_armed                              = false;
+}
+
+/** Delete a track; audio tracks return their granules and may unlock
+ *  the tempo (last one out). reason: 0 = delete, 1 = undo. */
+void DestroyTrack(int slot, uint8_t reason)
+{
+    Track::Slot& s         = registry.Get(slot);
+    uint8_t      gen       = s.gen;
+    bool         was_audio = s.kind == Track::Kind::Audio;
+    registry.Destroy(slot);
+    if(was_audio)
+    {
+        pool.Free(s.chain, s.length_bars);
+        if(registry.CountKind(Track::Kind::Audio) == 0)
+        {
+            pool.Unlock();
+            clk.SetLocked(false);
+            SendTransport(); // tempo turns again
+        }
+        SendPool();
+    }
+    SendTrackGone((uint8_t)slot, gen, reason);
 }
 
 void DoUndo()
@@ -713,9 +995,7 @@ void DoUndo()
     {
         return; // nothing to undo — silence, not an error
     }
-    uint8_t gen = registry.Get(slot).gen;
-    registry.Destroy(slot);
-    SendTrackGone((uint8_t)slot, gen, 1);
+    DestroyTrack(slot, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,8 +1304,7 @@ void ProcessCommand()
                    && registry.Get(slot).active.load()
                    && registry.Get(slot).gen == gen)
                 {
-                    registry.Destroy(slot);
-                    SendTrackGone(slot, gen, 0);
+                    DestroyTrack(slot, 0);
                 }
             }
             break;
@@ -1046,7 +1325,14 @@ void ProcessCommand()
                    && registry.Get(slot).active.load()
                    && registry.Get(slot).gen == parser.payload[1])
                 {
-                    SendTrackData(slot);
+                    if(registry.Get(slot).kind == Track::Kind::Audio)
+                    {
+                        SendAudioPeaks(slot);
+                    }
+                    else
+                    {
+                        SendTrackData(slot);
+                    }
                 }
             }
             break;
@@ -1112,6 +1398,8 @@ int main(void)
     registry.Init();
     pads_ring.Reset();
     keys_ring.Reset();
+    audio_ring.Init(capture_ring_mem, CAPTURE_RING_SAMPLES);
+    pool.Init(granule_pool_mem, GRANULE_POOL_SAMPLES);
     cc_engine.Init();
     ui.Init(UsbSendRaw);
     cpu_meter.Init(hw.AudioSampleRate(), hw.AudioBlockSize());
@@ -1197,9 +1485,19 @@ int main(void)
         // Drain queued protocol frames (busy-retry per port)
         DrainTxQueue();
 
+        // Live-button single press fires after the double-press window
+        if(live_armed && now - live_ms >= 400)
+        {
+            live_armed = false;
+            RequestCaptureAt(Protocol::SRC_ANY, 0, live_tick);
+        }
+
         // Pending retrospective captures fire when the clock crosses
         // their bar boundary
         PollPendingCaptures();
+
+        // Ring -> granules copy in progress (guitar capture commit)
+        StepCopyJob();
 
         // Transport/tempo dirty -> publish
         if(clk.CheckDirty())
@@ -1293,13 +1591,25 @@ int main(void)
                 {
                     ControlChangeEvent cc = e.AsControlChange();
 
-                    // KeyLab Live button (CC 3, main port) = Capture.
-                    // The KeyLab transport buttons only exist on the DAW
-                    // USB port and never reach the DIN input, so Live is
-                    // the one spare main-port button (keylab_essential.md)
+                    // KeyLab Live button (CC 3, main port): single press
+                    // grabs pads+keys, DOUBLE press grabs the guitar.
+                    // Retrospective capture makes the 400 ms decision
+                    // delay free — the window is cut at the FIRST press's
+                    // clock position either way.
                     if(cc.control_number == 3)
                     {
-                        RequestCapture(Protocol::SRC_ANY, 0);
+                        if(live_armed && now - live_ms < 400)
+                        {
+                            live_armed = false;
+                            RequestCaptureAt(Protocol::SRC_GUITAR, 0,
+                                             live_tick);
+                        }
+                        else
+                        {
+                            live_armed = true;
+                            live_ms    = now;
+                            live_tick  = clk.NowTick();
+                        }
                         break;
                     }
 

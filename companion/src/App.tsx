@@ -40,6 +40,8 @@ import {
   buildReqTrackDataCommand,
   SRC_PADS,
   SRC_KEYS,
+  SRC_GUITAR,
+  KIND_AUDIO,
   CMD_PLAY,
   CMD_STOP,
   CMD_REWIND,
@@ -79,6 +81,7 @@ function App() {
   const [monitorEnabled, setMonitorEnabled] = useState(false)
   const [padBars, setPadBars] = useState(4)
   const [keyBars, setKeyBars] = useState(4)
+  const [guitarBars, setGuitarBars] = useState(4)
   const serialRef = useRef<WebSerialPort | null>(null)
   const parserRef = useRef<ProtocolParser | null>(null)
 
@@ -162,6 +165,13 @@ function App() {
     const t = setInterval(() => {
       const now = performance.now()
       for (const track of Object.values(device.tracks)) {
+        if (track.kind === KIND_AUDIO) {
+          const p = device.audioPeaks[track.slot]
+          if (!p || p.gen !== track.gen) {
+            send(buildReqTrackDataCommand(track.slot, track.gen))
+          }
+          continue
+        }
         const data = device.trackData[track.slot]
         const missing = !data || data.gen !== track.gen
         const stalled = data && !data.complete && now - data.lastChunkAtMs > 700
@@ -247,6 +257,13 @@ function App() {
     (bars: number) => {
       setKeyBars(bars)
       send(buildSrcLenCommand(SRC_KEYS, bars))
+    },
+    [send]
+  )
+  const handleGuitarBars = useCallback(
+    (bars: number) => {
+      setGuitarBars(bars)
+      send(buildSrcLenCommand(SRC_GUITAR, bars))
     },
     [send]
   )
@@ -384,8 +401,10 @@ function App() {
             device={device}
             padBars={padBars}
             keyBars={keyBars}
+            guitarBars={guitarBars}
             onPadBars={handlePadBars}
             onKeyBars={handleKeyBars}
+            onGuitarBars={handleGuitarBars}
             onCapture={handleCapture}
             onUndo={handleUndo}
             onMute={handleTrackMute}

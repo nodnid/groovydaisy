@@ -245,17 +245,18 @@ context, half the footprint of float; converted to float at playback).
 | **Audio loop pool (everything else)** | **~42 MB** |
 
 Pool capacity in bars depends on locked tempo (1 bar mono 16-bit =
-`4 × 60/BPM × 48000 × 2` bytes):
+`4 × 60/BPM × 48000 × 2` bytes; table corrected 2026-07-05 — the draft
+had double-counted bytes/bar, verified by host test):
 
 | Tempo | Bar size | Pool capacity |
 |---|---|---|
-| 60 BPM | 768 KB | ~56 bars |
-| 120 BPM | 384 KB | ~112 bars |
-| 180 BPM | 256 KB | ~168 bars |
+| 60 BPM | 384 KB | ~114 bars |
+| 120 BPM | 192 KB | ~229 bars |
+| 180 BPM | 128 KB | ~344 bars |
 
 Every bar in the pool is committed content — there is no undo/shadow
-overhead. Even the worst case (60 BPM) holds e.g. fourteen 4-bar audio
-tracks. The sample-bank/pool split is static in v2;
+overhead. Even the worst case (60 BPM) holds e.g. twenty-eight 4-bar
+audio tracks. The sample-bank/pool split is static in v2;
 making it configurable (smaller kit → more loop time) is a later option.
 
 ### CPU budget

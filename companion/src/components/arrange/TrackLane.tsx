@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { TICKS_PER_BAR } from '../../core/constants'
-import type { TrackState, TrackData, StripState } from '../../core/state'
-import { KIND_MIDI_DRUM, KIND_MIDI_SYNTH } from '../../core/protocol'
+import type { TrackState, TrackData, StripState, AudioPeaks } from '../../core/state'
+import { KIND_MIDI_DRUM, KIND_MIDI_SYNTH, KIND_AUDIO } from '../../core/protocol'
 
 export const KIND_COLORS: Record<number, string> = {
   [KIND_MIDI_DRUM]: '#3fb950', // green
@@ -20,6 +20,7 @@ const MAX_BARS = 8 // lane width is proportional to loop length vs this
 interface TrackLaneProps {
   track: TrackState
   data: TrackData | undefined
+  peaks: AudioPeaks | undefined
   strip: StripState | undefined
   nowTick: number
   playing: boolean
@@ -27,6 +28,47 @@ interface TrackLaneProps {
   onLevel: (slot: number, level: number) => void
   onDelete: (slot: number, gen: number) => void
   connected: boolean
+}
+
+/** Waveform rendering for audio lanes: mirrored peak bars. */
+function AudioContent({
+  peaks,
+  color,
+  muted,
+}: {
+  peaks: AudioPeaks | undefined
+  color: string
+  muted: boolean
+}) {
+  const H = 40
+  if (!peaks || peaks.peaks.length === 0) {
+    return (
+      <text x={2} y={H / 2 + 3} fontSize="7" fill="#8b949e">
+        loading…
+      </text>
+    )
+  }
+  const n = peaks.peaks.length
+  const w = 100 / n
+  return (
+    <>
+      {peaks.peaks.map((p, i) => {
+        const h = Math.max((p / 255) * (H - 4), 0.8)
+        return (
+          <rect
+            key={i}
+            x={i * w + w * 0.15}
+            y={H / 2 - h / 2}
+            width={w * 0.7}
+            height={h}
+            rx={0.6}
+            fill={color}
+            opacity={muted ? 0.25 : 0.9}
+          />
+        )
+      })}
+    </>
+  )
 }
 
 /** Note-content rendering: drum grid dots or piano-roll rects. */
@@ -133,6 +175,7 @@ function LaneContent({
 export default function TrackLane({
   track,
   data,
+  peaks,
   strip,
   nowTick,
   playing,
@@ -237,7 +280,11 @@ export default function TrackLane({
             preserveAspectRatio="none"
             className="absolute inset-0 w-full h-full"
           >
-            <LaneContent track={track} data={data} color={color} muted={muted} />
+            {track.kind === KIND_AUDIO ? (
+              <AudioContent peaks={peaks} color={color} muted={muted} />
+            ) : (
+              <LaneContent track={track} data={data} color={color} muted={muted} />
+            )}
           </svg>
           {/* looping playhead */}
           {playing && !muted && (

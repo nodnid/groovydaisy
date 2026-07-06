@@ -52,7 +52,7 @@ class Engine
         locked_            = false;
         bpm_               = DEFAULT_BPM;
         tick_              = 0;
-        accumulator_       = 0.0f;
+        accumulator_       = 0.0;
         tap_count_         = 0;
         last_tap_ms_       = 0;
         dirty_             = true;
@@ -77,7 +77,7 @@ class Engine
         }
         for(size_t f = 0; f < nframes; f++)
         {
-            accumulator_ += 1.0f;
+            accumulator_ += 1.0;
             if(accumulator_ >= samples_per_tick_)
             {
                 accumulator_ -= samples_per_tick_;
@@ -148,7 +148,7 @@ class Engine
         playing_           = false;
         preroll_remaining_ = 0;
         tick_              = 0;
-        accumulator_       = 0.0f;
+        accumulator_       = 0.0;
         run_start_tick_    = 0;
         dirty_             = true;
     }
@@ -270,8 +270,11 @@ class Engine
   private:
     void UpdateTickInterval()
     {
-        float ticks_per_second = (bpm_ * (float)PPQN) / 60.0f;
-        samples_per_tick_      = sample_rate_ / ticks_per_second;
+        // double precision: float32 accumulation drifts the grid by tens
+        // of ms per hour against the sample-exact audio loops — enough to
+        // flam the drums against the guitar mid-jam
+        double ticks_per_second = ((double)bpm_ * (double)PPQN) / 60.0;
+        samples_per_tick_       = (double)sample_rate_ / ticks_per_second;
     }
 
     float    sample_rate_;
@@ -279,8 +282,8 @@ class Engine
     bool     locked_;
     float    bpm_;
     uint32_t tick_;
-    float    accumulator_;
-    float    samples_per_tick_;
+    double   accumulator_;
+    double   samples_per_tick_;
     bool     dirty_;
 
     uint32_t intervals_[TAP_HISTORY];

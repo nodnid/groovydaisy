@@ -59,7 +59,19 @@ struct Slot
     MidiEv   events[MAX_EVENTS];
     uint16_t event_count = 0;
 
-    // Audio payload lands here in Phase 3 (granule chain)
+    // Audio payload (Kind::Audio): granule chain in LOOP-POSITION order —
+    // chain[b] holds the audio for loop bar b. Filled before Activate.
+    uint16_t chain[8]       = {0};
+    uint32_t samples_per_bar = 0;
+    // Waveform peaks for the UI (24/bar, u8), kept for snapshot resends
+    uint8_t  peaks[192];
+    uint16_t peak_count = 0;
+
+    // ---- audio-callback-owned audio playback state ----
+    // Resynced to the grid at every bar tick (sub-sample corrections);
+    // free-runs between resyncs.
+    uint32_t play_gran_off = 0; // offset within the current bar's granule
+    uint8_t  play_bar      = 0; // current loop bar
 
     // ---- audio-callback-owned playback state ----
     uint32_t last_tick_mod = 0xFFFFFFFF; // detects jumps/wraps

@@ -201,6 +201,112 @@ struct Pending
     uint32_t end_tick = 0;
 };
 
+// ---------------------------------------------------------------------------
+// Audio half: the guitar's rolling buffer.
+//
+// The audio callback writes every input sample (s16) while the grid runs;
+// at each bar boundary it records an anchor {tick, write_pos} — the exact
+// sample position of that bar line. Capture windows are then cut at
+// anchors, so the tick<->sample mapping is exact by construction, immune
+// to any accumulated float error. Reader (CopyJob, main loop) trails the
+// writer by design; the ring is sized with margin over the largest window.
+// ---------------------------------------------------------------------------
+
+struct BarAnchor
+{
+    uint32_t tick;       // bar-boundary tick (multiple of 384)
+    uint32_t sample_pos; // absolute write position at that tick
+};
+
+constexpr size_t AUDIO_ANCHORS = 16; // > MAX_BARS of look-back
+
+class AudioRing
+{
+  public:
+    void Init(int16_t* mem, uint32_t capacity_samples)
+    {
+        mem_      = mem;
+        capacity_ = capacity_samples;
+        Reset();
+    }
+
+    void Reset()
+    {
+        write_pos_.store(0, std::memory_order_relaxed);
+        anchor_count_.store(0, std::memory_order_relaxed);
+        level_accum_ = 0.0f;
+        level_.store(0.0f, std::memory_order_relaxed);
+    }
+
+    /** Audio-callback context: one input sample. */
+    inline void Write(float in)
+    {
+        uint32_t p = write_pos_.load(std::memory_order_relaxed);
+        float    v = in * 32767.0f;
+        if(v > 32767.0f)
+            v = 32767.0f;
+        if(v < -32768.0f)
+            v = -32768.0f;
+        mem_[p % capacity_] = (int16_t)v;
+        write_pos_.store(p + 1, std::memory_order_release);
+
+        // Cheap envelope follower for the "guitarist is playing" pulse
+        float a = in < 0 ? -in : in;
+        level_accum_ += 0.001f * (a - level_accum_);
+        if((p & 1023) == 0)
+        {
+            level_.store(level_accum_, std::memory_order_relaxed);
+        }
+    }
+
+    /** Audio-callback context: called on each bar-boundary tick. */
+    void AnchorBar(uint32_t tick)
+    {
+        uint32_t n = anchor_count_.load(std::memory_order_relaxed);
+        anchors_[n % AUDIO_ANCHORS]
+            = {tick, write_pos_.load(std::memory_order_relaxed)};
+        anchor_count_.store(n + 1, std::memory_order_release);
+    }
+
+    /** Main loop: sample position of the bar line at `tick`, or false. */
+    bool FindAnchor(uint32_t tick, uint32_t& out_pos) const
+    {
+        uint32_t n     = anchor_count_.load(std::memory_order_acquire);
+        uint32_t first = n > AUDIO_ANCHORS ? n - AUDIO_ANCHORS : 0;
+        for(uint32_t i = first; i < n; i++)
+        {
+            const BarAnchor& a = anchors_[i % AUDIO_ANCHORS];
+            if(a.tick == tick)
+            {
+                out_pos = a.sample_pos;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    uint32_t WritePos() const
+    {
+        return write_pos_.load(std::memory_order_acquire);
+    }
+
+    int16_t At(uint32_t abs_pos) const { return mem_[abs_pos % capacity_]; }
+
+    uint32_t Capacity() const { return capacity_; }
+
+    /** Envelope level 0..1-ish for activity display (main loop). */
+    float Level() const { return level_.load(std::memory_order_relaxed); }
+
+  private:
+    int16_t*              mem_      = nullptr;
+    uint32_t              capacity_ = 0;
+    BarAnchor             anchors_[AUDIO_ANCHORS];
+    std::atomic<uint32_t> write_pos_{0};
+    std::atomic<uint32_t> anchor_count_{0};
+    float                 level_accum_ = 0.0f;
+    std::atomic<float>    level_{0.0f};
+};
+
 } // namespace Capture
 
 #endif // GROOVYDAISY_CAPTURE_H

@@ -60,6 +60,12 @@ export const CMD_SRC_LEN = 0xa3
 export const CMD_REQ_TRACK_DATA = 0xa5
 export const CMD_GROOVE = 0xa6
 export const CMD_FX = 0xa7
+export const CMD_TRACK_EDIT = 0xa8
+
+// CMD_TRACK_EDIT ops (mirrors protocol.h)
+export const EDIT_TOGGLE_DRUM = 0
+export const EDIT_DELETE_NOTE = 1
+export const EDIT_MOVE_NOTE = 2
 
 // CMD_FX param ids (mirrors protocol.h)
 export const FX_REV_SIZE = 0
@@ -113,6 +119,7 @@ export const ERR_BUSY = 5
 
 export const ERR_NO_HISTORY = 6
 export const ERR_EMPTY = 7
+export const ERR_EVENTS_FULL = 8
 
 export const ERROR_NAMES: Record<number, string> = {
   [ERR_TEMPO_LOCKED]: 'Tempo is locked (audio loops exist)',
@@ -122,6 +129,7 @@ export const ERROR_NAMES: Record<number, string> = {
   [ERR_BUSY]: 'Capture in progress',
   [ERR_NO_HISTORY]: 'Not enough bars played yet',
   [ERR_EMPTY]: 'Nothing was played in that window',
+  [ERR_EVENTS_FULL]: 'Track is full (512 events)',
 }
 
 // CMD_MIXER / MSG_MIXER field ids
@@ -543,6 +551,31 @@ export function buildGrooveCommand(param: number, value: number): Uint8Array {
 /** Set one send-FX parameter (FX_* param ids); firmware echoes MSG_FX. */
 export function buildFxCommand(param: number, value: number): Uint8Array {
   return buildMessage(CMD_FX, new Uint8Array([param, value]))
+}
+
+/** Lane editing (horizon #1). Success republishes MSG_TRACK(+DATA) with a
+ *  bumped gen — the UI just re-renders from the new truth. */
+export interface TrackEditArgs {
+  op: number // EDIT_TOGGLE_DRUM | EDIT_DELETE_NOTE | EDIT_MOVE_NOTE
+  tick: number
+  note: number
+  vel?: number // toggle
+  newTick?: number // move
+  newNote?: number // move
+}
+
+export function buildTrackEditCommand(
+  slot: number,
+  gen: number,
+  args: TrackEditArgs
+): Uint8Array {
+  const a = args.op === EDIT_MOVE_NOTE ? (args.newTick ?? 0) & 0xff : (args.vel ?? 100)
+  const b = args.op === EDIT_MOVE_NOTE ? ((args.newTick ?? 0) >> 8) & 0xff : 0
+  const c = args.op === EDIT_MOVE_NOTE ? (args.newNote ?? args.note) : 0
+  return buildMessage(
+    CMD_TRACK_EDIT,
+    new Uint8Array([slot, gen, args.op, args.tick & 0xff, (args.tick >> 8) & 0xff, args.note, a, b, c])
+  )
 }
 
 /** Play the box from the Mac: inject a MIDI event over the serial link. */

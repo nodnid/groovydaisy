@@ -5,6 +5,7 @@ import {
   type DeviceState,
 } from '../../core/state'
 import TrackLane from './TrackLane'
+import type { TrackEditArgs } from '../../core/protocol'
 import CaptureStrip from './CaptureStrip'
 import GroovePanel from './GroovePanel'
 
@@ -21,6 +22,7 @@ interface ArrangeViewProps {
   onMute: (slot: number, mute: boolean) => void
   onLevel: (slot: number, level: number) => void
   onDelete: (slot: number, gen: number) => void
+  onEdit: (slot: number, gen: number, args: TrackEditArgs) => void
   onGroove: (param: number, value: number) => void
   connected: boolean
 }
@@ -43,6 +45,7 @@ export default function ArrangeView({
   onMute,
   onLevel,
   onDelete,
+  onEdit,
   onGroove,
   connected,
 }: ArrangeViewProps) {
@@ -115,6 +118,7 @@ export default function ArrangeView({
               onMute={onMute}
               onLevel={onLevel}
               onDelete={onDelete}
+              onEdit={onEdit}
               connected={connected}
             />
           ))}

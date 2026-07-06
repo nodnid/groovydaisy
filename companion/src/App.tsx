@@ -44,6 +44,8 @@ import {
   buildMidiInjectCommand,
   buildGrooveCommand,
   buildFxCommand,
+  buildTrackEditCommand,
+  type TrackEditArgs,
   SRC_PADS,
   SRC_KEYS,
   SRC_GUITAR,
@@ -294,6 +296,11 @@ function App() {
     (param: number, value: number) => send(buildGrooveCommand(param, value)),
     [send]
   )
+  const handleTrackEdit = useCallback(
+    (slot: number, gen: number, args: TrackEditArgs) =>
+      send(buildTrackEditCommand(slot, gen, args)),
+    [send]
+  )
 
   const handleLoadUserPreset = useCallback(
     (params: SynthParams) => {
@@ -437,6 +444,7 @@ function App() {
             onMute={handleTrackMute}
             onLevel={handleTrackLevel}
             onDelete={handleTrackDelete}
+            onEdit={handleTrackEdit}
             onGroove={handleGroove}
             connected={connected}
           />

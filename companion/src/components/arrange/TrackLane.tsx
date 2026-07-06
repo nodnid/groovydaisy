@@ -1,7 +1,17 @@
 import { useRef, useState } from 'react'
 import { TICKS_PER_BAR } from '../../core/constants'
 import type { TrackState, TrackData, StripState, AudioPeaks } from '../../core/state'
-import { KIND_MIDI_DRUM, KIND_MIDI_SYNTH, KIND_AUDIO } from '../../core/protocol'
+import {
+  KIND_MIDI_DRUM,
+  KIND_MIDI_SYNTH,
+  KIND_AUDIO,
+  EDIT_TOGGLE_DRUM,
+  EDIT_DELETE_NOTE,
+  EDIT_MOVE_NOTE,
+  type TrackEditArgs,
+} from '../../core/protocol'
+
+const GRID = 24 // ticks per 16th (96 PPQN)
 
 export const KIND_COLORS: Record<number, string> = {
   [KIND_MIDI_DRUM]: '#3fb950', // green
@@ -27,6 +37,7 @@ interface TrackLaneProps {
   onMute: (slot: number, mute: boolean) => void
   onLevel: (slot: number, level: number) => void
   onDelete: (slot: number, gen: number) => void
+  onEdit: (slot: number, gen: number, args: TrackEditArgs) => void
   connected: boolean
 }
 
@@ -71,27 +82,47 @@ function AudioContent({
   )
 }
 
-/** Note-content rendering: drum grid dots or piano-roll rects. */
+/** Note-content rendering: drum grid dots or piano-roll rects.
+ *  With onEdit set, lanes are EDITABLE (horizon #1): click a drum cell
+ *  to toggle the hit; drag a synth note (snaps to 16ths, vertical =
+ *  pitch); shift-click a synth note to delete it. */
 function LaneContent({
   track,
   data,
   color,
   muted,
+  onEdit,
 }: {
   track: TrackState
   data: TrackData | undefined
   color: string
   muted: boolean
+  onEdit?: (args: TrackEditArgs) => void
 }) {
   const lengthTicks = track.lengthBars * TICKS_PER_BAR
   const W = 100 // viewBox percent-ish units
   const H = 40
   const opacity = muted ? 0.25 : 0.9
+  const dragRef = useRef<null | {
+    note: number
+    from: number
+    startX: number
+    startY: number
+    box: DOMRect
+    span: number
+  }>(null)
 
-  if (!data || data.events.length === 0) {
+  if (!data) {
     return (
       <text x={2} y={H / 2 + 3} fontSize="7" fill="#8b949e">
-        {data ? '(empty)' : 'loading…'}
+        loading…
+      </text>
+    )
+  }
+  if (data.events.length === 0 && track.kind !== KIND_MIDI_DRUM) {
+    return (
+      <text x={2} y={H / 2 + 3} fontSize="7" fill="#8b949e">
+        (empty)
       </text>
     )
   }
@@ -106,7 +137,48 @@ function LaneContent({
         const y = H - ((row + 0.5) / 8) * H
         return <circle key={i} cx={x} cy={y} r={1.6} fill={color} opacity={opacity} />
       })
-    return <>{dots}</>
+    // Click-to-toggle: the whole lane is a drum grid
+    const handleClick = (e: React.MouseEvent<SVGRectElement>) => {
+      if (!onEdit) return
+      const svg = e.currentTarget.ownerSVGElement
+      if (!svg) return
+      const r = svg.getBoundingClientRect()
+      const fx = (e.clientX - r.left) / r.width
+      const fy = (e.clientY - r.top) / r.height
+      const steps = track.lengthBars * 16
+      const step = Math.max(0, Math.min(Math.floor(fx * steps), steps - 1))
+      const row = Math.max(0, Math.min(Math.floor((1 - fy) * 8), 7))
+      const note = 36 + row
+      const cellStart = step * GRID
+      const hit = data.events.find(
+        (ev) =>
+          (ev.status & 0xf0) === 0x90 &&
+          ev.d2 > 0 &&
+          ev.d1 === note &&
+          ev.tick >= cellStart &&
+          ev.tick < cellStart + GRID
+      )
+      onEdit({
+        op: EDIT_TOGGLE_DRUM,
+        tick: hit ? hit.tick : cellStart,
+        note,
+        vel: 100,
+      })
+    }
+    return (
+      <>
+        {dots}
+        <rect
+          x={0}
+          y={0}
+          width={W}
+          height={H}
+          fill="transparent"
+          style={onEdit ? { cursor: 'pointer' } : undefined}
+          onClick={handleClick}
+        />
+      </>
+    )
   }
 
   // Piano roll: pair note-ons with their offs; notes crossing the loop
@@ -167,6 +239,41 @@ function LaneContent({
   }
   const span = hi - lo + 1
 
+  const beginDrag = (e: React.PointerEvent<SVGRectElement>, note: number, from: number) => {
+    if (!onEdit) return
+    if (e.shiftKey) {
+      onEdit({ op: EDIT_DELETE_NOTE, tick: from, note })
+      return
+    }
+    const svg = e.currentTarget.ownerSVGElement
+    if (!svg) return
+    dragRef.current = {
+      note,
+      from,
+      startX: e.clientX,
+      startY: e.clientY,
+      box: svg.getBoundingClientRect(),
+      span,
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  const endDrag = (e: React.PointerEvent<SVGRectElement>) => {
+    const d = dragRef.current
+    dragRef.current = null
+    if (!d || !onEdit) return
+    const dx = e.clientX - d.startX
+    const dy = e.clientY - d.startY
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return // a click, not a drag
+    const dTick = Math.round((dx / d.box.width) * lengthTicks)
+    const dNote = -Math.round((dy / d.box.height) * d.span)
+    let newTick = Math.round((d.from + dTick) / GRID) * GRID
+    newTick = ((newTick % lengthTicks) + lengthTicks) % lengthTicks
+    const newNote = Math.max(0, Math.min(127, d.note + dNote))
+    if (newTick === d.from && newNote === d.note) return
+    onEdit({ op: EDIT_MOVE_NOTE, tick: d.from, note: d.note, newTick, newNote })
+  }
+
   return (
     <>
       {ccCurves}
@@ -180,16 +287,29 @@ function LaneContent({
               ]
             : [[r.from, r.to]]
         return segs.map(([a, b], j) => (
-          <rect
-            key={`${i}-${j}`}
-            x={(a / lengthTicks) * W}
-            y={y}
-            width={Math.max(((b - a) / lengthTicks) * W, 0.8)}
-            height={2}
-            rx={0.8}
-            fill={color}
-            opacity={opacity}
-          />
+          <g key={`${i}-${j}`}>
+            <rect
+              x={(a / lengthTicks) * W}
+              y={y}
+              width={Math.max(((b - a) / lengthTicks) * W, 0.8)}
+              height={2}
+              rx={0.8}
+              fill={color}
+              opacity={opacity}
+            />
+            {onEdit && (
+              <rect
+                x={(a / lengthTicks) * W}
+                y={y - 2}
+                width={Math.max(((b - a) / lengthTicks) * W, 1.6)}
+                height={6}
+                fill="transparent"
+                style={{ cursor: 'grab' }}
+                onPointerDown={(e) => beginDrag(e, r.note, r.from)}
+                onPointerUp={endDrag}
+              />
+            )}
+          </g>
         ))
       })}
     </>
@@ -206,8 +326,15 @@ export default function TrackLane({
   onMute,
   onLevel,
   onDelete,
+  onEdit,
   connected,
 }: TrackLaneProps) {
+  // Lanes are editable once the content is fully assembled (edits key on
+  // exact ticks from the data we're showing)
+  const editable = connected && data?.complete
+  const handleEdit = editable
+    ? (args: TrackEditArgs) => onEdit(track.slot, track.gen, args)
+    : undefined
   const muted = strip?.mute ?? false
   const level = strip?.level ?? 101
   const color = KIND_COLORS[track.kind] ?? '#8b949e'
@@ -307,7 +434,13 @@ export default function TrackLane({
             {track.kind === KIND_AUDIO ? (
               <AudioContent peaks={peaks} color={color} muted={muted} />
             ) : (
-              <LaneContent track={track} data={data} color={color} muted={muted} />
+              <LaneContent
+                track={track}
+                data={data}
+                color={color}
+                muted={muted}
+                onEdit={handleEdit}
+              />
             )}
           </svg>
           {/* looping playhead */}

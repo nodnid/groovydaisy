@@ -31,6 +31,7 @@
 #include "cc_map.h"
 #include "midi_router.h"
 #include "track.h"
+#include "track_edit.h"
 #include "capture.h"
 #include "audio_track.h"
 #include "groove.h"
@@ -1108,6 +1109,79 @@ void DoUndo()
 }
 
 // ---------------------------------------------------------------------------
+// Lane editing (horizon #1): never mutate an active payload — deactivate
+// (the audio ISR observes the store before any mutation below runs on
+// this single core, releases the track's notes, stops reading events),
+// mutate, bump gen, reactivate, republish.
+// ---------------------------------------------------------------------------
+
+void HandleTrackEdit(const uint8_t* p)
+{
+    uint8_t slot = p[0];
+    uint8_t gen  = p[1];
+    uint8_t op   = p[2];
+    if(slot >= Track::MAX_TRACKS)
+    {
+        return;
+    }
+    Track::Slot& s = registry.Get(slot);
+    if(!s.active.load(std::memory_order_relaxed) || s.gen != gen
+       || s.kind == Track::Kind::Audio)
+    {
+        return; // stale reference or not an editable (MIDI) track
+    }
+
+    uint32_t tick = (uint32_t)(p[3] | (p[4] << 8));
+    uint8_t  note = p[5];
+
+    s.active.store(false, std::memory_order_release);
+
+    TrackEdit::Result res = TrackEdit::Result::NotFound;
+    switch(op)
+    {
+        case Protocol::EDIT_TOGGLE_DRUM:
+            if(s.kind == Track::Kind::MidiDrum)
+            {
+                res = TrackEdit::ToggleDrum(s.events, s.event_count,
+                                            Track::MAX_EVENTS, tick, note,
+                                            p[6] ? p[6] : 100);
+            }
+            break;
+        case Protocol::EDIT_DELETE_NOTE:
+            if(s.kind == Track::Kind::MidiSynth)
+            {
+                res = TrackEdit::DeleteNote(s.events, s.event_count, tick,
+                                            note);
+            }
+            break;
+        case Protocol::EDIT_MOVE_NOTE:
+            if(s.kind == Track::Kind::MidiSynth)
+            {
+                uint32_t new_tick = (uint32_t)(p[6] | (p[7] << 8));
+                res = TrackEdit::MoveNote(s.events, s.event_count,
+                                          s.LengthTicks(), tick, note,
+                                          new_tick, p[8]);
+            }
+            break;
+        default: break;
+    }
+
+    // Every edit is a new content generation, even a no-op: the gen bump
+    // is what tells the companion its cached lane is stale
+    s.gen++;
+    s.last_tick_mod = 0xFFFFFFFF; // playback repositions cleanly
+    s.playback_idx  = 0;
+    s.active.store(true, std::memory_order_release);
+
+    if(res == TrackEdit::Result::Full)
+    {
+        ui.Error(Protocol::ERR_EVENTS_FULL, slot);
+    }
+    SendTrack(slot);
+    SendTrackData(slot);
+}
+
+// ---------------------------------------------------------------------------
 // CC -> parameter application
 // ---------------------------------------------------------------------------
 
@@ -1636,6 +1710,13 @@ void ProcessCommand()
                     default: break;
                 }
                 SendFx();
+            }
+            break;
+
+        case Protocol::CMD_TRACK_EDIT:
+            if(parser.payload_len >= 9)
+            {
+                HandleTrackEdit(parser.payload);
             }
             break;
 

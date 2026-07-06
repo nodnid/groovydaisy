@@ -163,6 +163,18 @@ constexpr uint8_t GROOVE_VEL_COMP   = 3;
 // CMD_FX: [param][value] — set one send-FX parameter; echoed as MSG_FX
 constexpr uint8_t CMD_FX = 0xA7;
 
+// CMD_TRACK_EDIT: [slot][gen][op][tick:2][note][a][b][c] — lane editing
+// (horizon #1). op 0 = toggle drum hit (a = velocity), op 1 = delete
+// synth note (+matched off), op 2 = move synth note (a,b = new tick LE,
+// c = new note). Applied via deactivate → mutate → gen++ → reactivate;
+// success republishes MSG_TRACK + MSG_TRACK_DATA with the new gen.
+constexpr uint8_t CMD_TRACK_EDIT = 0xA8;
+
+// CMD_TRACK_EDIT ops
+constexpr uint8_t EDIT_TOGGLE_DRUM = 0;
+constexpr uint8_t EDIT_DELETE_NOTE = 1;
+constexpr uint8_t EDIT_MOVE_NOTE   = 2;
+
 // CMD_FX param ids
 constexpr uint8_t FX_REV_SIZE = 0; // reverb feedback, CC scale
 constexpr uint8_t FX_REV_TONE = 1; // reverb lowpass, CC scale (log)
@@ -188,6 +200,7 @@ constexpr uint8_t ERR_KIND_CAP     = 4;
 constexpr uint8_t ERR_BUSY         = 5; // ring lapped / copy in flight
 constexpr uint8_t ERR_NO_HISTORY   = 6; // not enough bars elapsed yet
 constexpr uint8_t ERR_EMPTY        = 7; // nothing played in the window
+constexpr uint8_t ERR_EVENTS_FULL  = 8; // track event array at capacity
 
 // CMD_MIXER / MSG_MIXER field ids
 constexpr uint8_t MIX_FIELD_LEVEL    = 0;

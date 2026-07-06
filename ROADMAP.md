@@ -82,11 +82,15 @@ protocol v3, companion Groove panel; SPEC.md has the as-built sections):
 
 Ordered by feel-per-effort, informed by Cleo's reactions so far:
 
-1. **Note editing on lanes** (the groovebox pull, explicitly wanted):
-   click a drum-grid cell to toggle, drag piano-roll notes. Foundation
-   (MSG_TRACK_DATA) already ships; needs CMD_TRACK_EDIT + in-place
-   event patching (respect the never-mutate-active-payload rule: edit =
-   clone-to-reserved-slot + atomic swap, same as capture).
+1. ✅ **Note editing on lanes** (BUILT 2026-07-06): click a drum-grid
+   cell to toggle the hit, drag piano-roll notes (snaps to 16ths,
+   vertical = pitch), shift-click to delete. CMD_TRACK_EDIT 0xA8 with
+   host-tested ops in src/track_edit.h (wrap-aware off pairing, duration
+   preserved on move). The never-mutate rule is honored the cheap way:
+   deactivate → mutate → gen++ → reactivate (single core: the audio ISR
+   observes the store), then republish — strips/seq identity survive,
+   the companion re-renders from the new truth. tools/verify_edit.py
+   awaits the next flash.
 2. **Scenes** (song sections): snapshot mute-states + switch on the
    next bar line. Cheap to build, huge arrangement power. Verse/chorus
    at a campfire.

@@ -60,21 +60,18 @@ protocol v3, companion Groove panel; SPEC.md has the as-built sections):
   sweet spot, dotted-8th feedback level, CPU headroom with 3 audio
   loops + reverb, drum pitch/decay ranges.
 
-## NEXT SESSION FIRST: the CPU budget (root-caused, fix designed)
+## The CPU budget — SOLVED (2026-07-06, same night)
 
-The all-night session (2026-07-06) proved every feature on hardware and
-armed self-rescue (fault recorder + livelock watchdog), but left ONE
-open problem: the DSP floor is ~3-5x too expensive (idle 20%, ~8% per
-synth voice, reverb ~+50% — @480 MHz). Root-cause theory with strong
-evidence (uniform slowdown across ALL code): since Phase 2 the app
-executes XIP from QSPI flash; the callback's working set exceeds the
-16 KB I-cache, so hot loops fetch from ~100 MHz quad-SPI continuously.
-ITCM RAM (64 KB) sits at 0% used. Fix: map the hot path into ITCM via
-the linker (.itcm_text section for AudioCallback + synth/sampler/fx
-Process paths; map reverbsc.o's text too). Do it fresh, measure per
-step with cpu_peak, keep tests short and silent (master down; idle
-measurements make no sound). Quick wins already taken: 480 MHz boost,
-FPDSCR flush-to-zero, FX sleep gates.
+Root cause confirmed and fixed: QSPI XIP starved the 16 KB I-cache.
+Hot DSP now runs from zero-wait ITCM (STM32H750IB_qspi_itcm.lds +
+src/itcm.h; 9.5 KB of 64 KB used). Measured @480 MHz (avg/peak):
+6 voices 66/82 -> 27/53; 6 voices + reverb tail 50/53 (the tail alone
+had been 75/86); the killer traffic that took the box off the bus
+three times now survives at 52/59. Stack of wins that got here:
+480 MHz boost (was 400 since Phase 0), FPDSCR flush-to-zero (the
+callback ran with denormals since Phase 0), FX sleep gates, full-rate
+reverb kept (ear beat math). Idle floor is 19/22 — fine; shave later
+by placing sampler/metro/ring paths if ever needed.
 
 ## Phase 6 — Giggability (in progress)
 

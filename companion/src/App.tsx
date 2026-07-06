@@ -5,6 +5,7 @@ import TabBar, { type TabId } from './components/global/TabBar'
 import ArrangeView from './components/arrange/ArrangeView'
 import MixPanel from './components/MixPanel'
 import MidiMonitor, { type MidiLogEntry } from './components/MidiMonitor'
+import MidiBridge from './components/MidiBridge'
 import EngineState from './components/EngineState'
 import RawLog from './components/RawLog'
 import SynthPanel from './components/SynthPanel'
@@ -38,6 +39,7 @@ import {
   buildTrackDeleteCommand,
   buildSrcLenCommand,
   buildReqTrackDataCommand,
+  buildMidiInjectCommand,
   SRC_PADS,
   SRC_KEYS,
   SRC_GUITAR,
@@ -267,6 +269,11 @@ function App() {
     },
     [send]
   )
+  const handleMidiInject = useCallback(
+    (status: number, d1: number, d2: number) =>
+      send(buildMidiInjectCommand(status, d1, d2)),
+    [send]
+  )
 
   const handleLoadUserPreset = useCallback(
     (params: SynthParams) => {
@@ -459,6 +466,9 @@ function App() {
                 protoVer={device.protoVer}
               />
             </div>
+
+            {/* Web MIDI -> box bridge */}
+            <MidiBridge onEvent={handleMidiInject} connected={connected} />
 
             {/* Hardware CC mirror: bank + fader pickup state */}
             <CCControlPanel

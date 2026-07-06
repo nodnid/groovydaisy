@@ -1280,6 +1280,41 @@ void ProcessCommand()
             }
             break;
 
+        case Protocol::CMD_MIDI_INJECT:
+            if(parser.payload_len >= 3)
+            {
+                uint8_t status = parser.payload[0];
+                uint8_t d1     = parser.payload[1];
+                uint8_t d2     = parser.payload[2];
+                uint8_t type   = status & 0xF0;
+                if(type == 0x90 || type == 0x80)
+                {
+                    // Same ring as the KeyLab: engines + capture rings
+                    midi_to_audio.Push({status, d1, d2});
+                }
+                else if(type == 0xB0)
+                {
+                    // Same CC path as UART: bank/pickup aware
+                    uint8_t            out_value;
+                    CCMap::ParamTarget target
+                        = cc_engine.ProcessCC(d1, d2, out_value);
+                    if(target != CCMap::TARGET_NONE)
+                    {
+                        ApplyParamTarget(target, out_value);
+                    }
+                    if(cc_engine.BankChanged())
+                    {
+                        ui.Bank(static_cast<uint8_t>(cc_engine.GetBank()));
+                        SendFaderState();
+                    }
+                }
+                if(ui.MonitorEnabled())
+                {
+                    ui.MidiIn(status, d1, d2);
+                }
+            }
+            break;
+
         case Protocol::CMD_REQ_STATE:
             SendSnapshot();
             break;

@@ -121,6 +121,10 @@ constexpr uint8_t CMD_SET_BANK    = 0x87;
 constexpr uint8_t CMD_MIXER       = 0x88;
 constexpr uint8_t CMD_METRO       = 0x89;
 constexpr uint8_t CMD_MONITOR     = 0x8A;
+// CMD_MIDI_INJECT: [status][d1][d2] — play the box over USB: injected
+// events take the exact same path as UART MIDI (notes -> engines +
+// capture rings; CCs -> bank/pickup mapping). The Mac is a band member.
+constexpr uint8_t CMD_MIDI_INJECT = 0x8B;
 constexpr uint8_t CMD_REQ_STATE   = 0x90;
 
 // Track/capture commands (Phase 2)

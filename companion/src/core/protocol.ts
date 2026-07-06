@@ -47,6 +47,7 @@ export const CMD_SET_BANK = 0x87
 export const CMD_MIXER = 0x88
 export const CMD_METRO = 0x89
 export const CMD_MONITOR = 0x8a
+export const CMD_MIDI_INJECT = 0x8b
 export const CMD_REQ_STATE = 0x90
 export const CMD_CAPTURE = 0xa0
 export const CMD_UNDO = 0xa1
@@ -466,6 +467,15 @@ export function buildSrcLenCommand(source: number, bars: number): Uint8Array {
 
 export function buildReqTrackDataCommand(slot: number, gen: number): Uint8Array {
   return buildMessage(CMD_REQ_TRACK_DATA, new Uint8Array([slot, gen]))
+}
+
+/** Play the box from the Mac: inject a MIDI event over the serial link. */
+export function buildMidiInjectCommand(
+  status: number,
+  d1: number,
+  d2: number
+): Uint8Array {
+  return buildMessage(CMD_MIDI_INJECT, new Uint8Array([status, d1, d2]))
 }
 
 /**

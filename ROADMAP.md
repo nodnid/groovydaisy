@@ -91,7 +91,17 @@ Ordered by feel-per-effort, informed by Cleo's reactions so far:
 7. **Phone app**: core/ is already DOM-free by design; wrap in
    Capacitor, WebSerial→Web Bluetooth or USB-C serial. The campfire
    loses the laptop.
-8. **MIDI out** (expansion header UART — the TRS jack is input-only,
+8. **USB MIDI, tier 2** (tier 1 SHIPPED 2026-07-05: CMD_MIDI_INJECT +
+   the companion's Web MIDI bridge — any Mac MIDI source, IAC bus, DAW,
+   or script plays the box through the serial link, and bridged playing
+   is capture-able like everything else). Tier 2 = class-compliant USB
+   MIDI device so the Daisy appears in every DAW with zero glue: our
+   pinned libDaisy v5.4 has MidiUsbTransport with per-port selection,
+   but the USB device CLASS is a single global (`usbd_mode` in
+   src/hid/usb.cpp) — CDC-on-Pod + MIDI-on-Seed needs a small patch to
+   the pinned checkout. Contained, but it touches the hard-won USB
+   stack: schedule deliberately, keep the patch in-repo.
+9. **MIDI out** (expansion header UART — the TRS jack is input-only,
    encoder click owns the TX pin): sync external gear to the jam.
 9. **Stretch: audio input FX** (amp-ish drive/comp on the guitar strip)
    and **stereo audio capture** (line-in R is currently unused).

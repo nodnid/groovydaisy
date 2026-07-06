@@ -152,6 +152,13 @@ makes decision latency free). The app offers one-tap per-source buttons.
 A bad take never becomes content — you just don't press the button. That is
 what shrinks undo from a core loop into a rare corrective action.
 
+**Early-downbeat grace** (Phase 4.1): a note played within a 32nd note
+*before* the capture window's opening bar line was meant for that downbeat
+— the extractor pulls it in and sits it exactly on the bar line (its
+note-off travels by the same shift, so the duration survives). Always on,
+independent of quantize; CCs and orphan note-offs get no grace. Without
+this, an eager first hit simply vanished from the take — punishment.
+
 Classic prospective punch-in falls out for free if ever wanted (press Capture
 at the *end* of the passage instead of Record at the start); v2 ships
 retrospective-only to keep a single mental model.

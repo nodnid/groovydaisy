@@ -170,3 +170,144 @@ TEST(ring_wraps_without_losing_recent_history)
     CHECK_EQ((int)res, (int)ExtractResult::Ok);
     CHECK(n > 0);
 }
+
+// ---------------------------------------------------------------------------
+// Early-downbeat grace (Phase 4.1): a first note played a hair before the
+// window's bar line is pulled onto it instead of being dropped
+// ---------------------------------------------------------------------------
+
+TEST(extract_grace_pulls_early_downbeat_to_bar_line)
+{
+    MidiRing ring;
+    ring.Reset();
+    // 1-bar window [384, 768). Downbeat played 9 ticks early.
+    PushNote(ring, 375, 60, 100);
+    PushNote(ring, 480, 60, 0);
+
+    Track::MidiEv out[512];
+    uint16_t      n = 0;
+    auto res = ExtractWindow(ring, 768, 1, out, 512, n);
+    CHECK_EQ((int)res, (int)ExtractResult::Ok);
+    CHECK_EQ(n, 2);
+    CHECK_EQ(out[0].tick, 0u); // 384 % 384: exactly on the downbeat
+    CHECK_EQ(out[0].status, 0x90);
+    // The off (vel-0 note-on) travels by the same +9: duration survives
+    CHECK_EQ(out[1].tick, (480u + 9u) % 384u);
+    CHECK_EQ(out[1].d2, 0);
+}
+
+TEST(extract_grace_has_a_limit)
+{
+    MidiRing ring;
+    ring.Reset();
+    // 13 ticks early is outside the 12-tick grace: still excluded
+    PushNote(ring, 371, 60, 100);
+    PushNote(ring, 500, 62, 90); // something else so the window isn't empty
+    PushNote(ring, 510, 62, 0);
+
+    Track::MidiEv out[512];
+    uint16_t      n = 0;
+    ExtractWindow(ring, 768, 1, out, 512, n);
+    CHECK_EQ(n, 2);
+    CHECK_EQ(out[0].d1, 62);
+}
+
+TEST(extract_grace_drum_hit_and_short_grace_note)
+{
+    MidiRing ring;
+    ring.Reset();
+    // Early drum hit: pulled to the bar line, no off bookkeeping
+    PushNote(ring, 380, 36, 110, true, 9);
+    // Synth note living entirely in the grace zone (staccato downbeat):
+    // on 378 (delta 6) -> 0; off 382 -> 382+6=388 -> position 4
+    PushNote(ring, 378, 64, 90);
+    PushNote(ring, 382, 64, 0);
+
+    Track::MidiEv out[512];
+    uint16_t      n = 0;
+    auto res = ExtractWindow(ring, 768, 1, out, 512, n);
+    CHECK_EQ((int)res, (int)ExtractResult::Ok);
+    CHECK_EQ(n, 3);
+    bool drum_at_0 = false, on_at_0 = false, off_at_4 = false;
+    for(uint16_t i = 0; i < n; i++)
+    {
+        if(out[i].status == 0x99 && out[i].tick == 0)
+            drum_at_0 = true;
+        if(out[i].status == 0x90 && out[i].d1 == 64 && out[i].tick == 0)
+            on_at_0 = true;
+        if(out[i].d1 == 64 && out[i].d2 == 0 && out[i].tick == 4)
+            off_at_4 = true;
+    }
+    CHECK(drum_at_0);
+    CHECK(on_at_0);
+    CHECK(off_at_4);
+}
+
+TEST(extract_grace_admits_notes_only)
+{
+    MidiRing ring;
+    ring.Reset();
+    ring.Push(380, 0xB0, 74, 100);    // CC in the grace zone: not a downbeat
+    PushNote(ring, 379, 60, 0);       // orphan off in grace: dropped
+    PushNote(ring, 400, 62, 90);
+    PushNote(ring, 420, 62, 0);
+
+    Track::MidiEv out[512];
+    uint16_t      n = 0;
+    ExtractWindow(ring, 768, 1, out, 512, n);
+    CHECK_EQ(n, 2);
+    CHECK_EQ(out[0].d1, 62);
+}
+
+TEST(extract_grace_retrigger_does_not_inherit_shift)
+{
+    MidiRing ring;
+    ring.Reset();
+    // Early on (delta 4) closes at 400; the SAME note retriggered inside
+    // the window must not inherit the +4 on its own off
+    PushNote(ring, 380, 60, 100); // -> 0
+    PushNote(ring, 400, 60, 0);   // -> 404 % 384 = 20
+    PushNote(ring, 500, 60, 100); // -> 116
+    PushNote(ring, 600, 60, 0);   // -> 216 (unshifted)
+
+    Track::MidiEv out[512];
+    uint16_t      n = 0;
+    ExtractWindow(ring, 768, 1, out, 512, n);
+    CHECK_EQ(n, 4);
+    CHECK_EQ(out[0].tick, 0u);
+    CHECK_EQ(out[1].tick, 20u);
+    CHECK_EQ(out[2].tick, 116u);
+    CHECK_EQ(out[3].tick, 216u);
+}
+
+TEST(extract_grace_shifted_off_clamps_inside_window)
+{
+    MidiRing ring;
+    ring.Reset();
+    // Early on (delta 4), off at the window's last tick: the +4 shift
+    // would leak past the end and wrap — clamp to end-1 instead
+    PushNote(ring, 380, 60, 100);
+    PushNote(ring, 767, 60, 0);
+
+    Track::MidiEv out[512];
+    uint16_t      n = 0;
+    ExtractWindow(ring, 768, 1, out, 512, n);
+    CHECK_EQ(n, 2);
+    CHECK_EQ(out[0].tick, 0u);
+    CHECK_EQ(out[1].tick, 383u); // (768-1) % 384
+}
+
+TEST(extract_grace_note_alone_is_not_empty)
+{
+    MidiRing ring;
+    ring.Reset();
+    // Only an early downbeat was played: previously ERR_EMPTY, now a take
+    PushNote(ring, 380, 36, 110, true, 9);
+
+    Track::MidiEv out[512];
+    uint16_t      n = 0;
+    auto res = ExtractWindow(ring, 768, 1, out, 512, n);
+    CHECK_EQ((int)res, (int)ExtractResult::Ok);
+    CHECK_EQ(n, 1);
+    CHECK_EQ(out[0].tick, 0u);
+}

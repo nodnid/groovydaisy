@@ -30,6 +30,12 @@ constexpr uint32_t TICKS_PER_BAR = Track::TICKS_PER_BAR; // 384
 constexpr size_t   RING_EVENTS   = 1024;
 constexpr uint8_t  MAX_BARS      = 8;
 
+// Early-downbeat grace: a note played within a 32nd note BEFORE the
+// window's opening bar line was meant for that downbeat — the window
+// pulls it in and sits it exactly on the bar line instead of dropping
+// it (nothing punishes). Always on; quantize then has nothing to move.
+constexpr uint32_t EARLY_GRACE = TICKS_PER_BAR / 32; // 12 ticks
+
 enum class Source : uint8_t
 {
     Pads   = 0,
@@ -97,6 +103,11 @@ enum class ExtractResult : uint8_t
  * the global bar grid, which is what keeps every track aligned (SPEC.md
  * track model). Output is sorted by position.
  *
+ * Early-downbeat grace: note-ons within EARLY_GRACE ticks before the
+ * window are pulled onto the opening bar line (their note-offs shift by
+ * the same delta, so durations survive — the quantize rule). CCs and
+ * orphan offs get no grace.
+ *
  * Dangling notes: a note-on inside the window without its note-off gets
  * one synthesized at the window's final tick; orphan note-offs (note-on
  * predates the window) are dropped.
@@ -107,6 +118,8 @@ inline ExtractResult ExtractWindow(const MidiRing& ring, uint32_t end_tick,
 {
     const uint32_t length_ticks = (uint32_t)bars * TICKS_PER_BAR;
     const uint32_t start_tick   = end_tick - length_ticks;
+    const uint32_t grace_start
+        = start_tick >= EARLY_GRACE ? start_tick - EARLY_GRACE : 0;
 
     const uint32_t head  = ring.Head();
     const uint32_t first = head > RING_EVENTS ? head - RING_EVENTS : 0;
@@ -115,20 +128,32 @@ inline ExtractResult ExtractWindow(const MidiRing& ring, uint32_t end_tick,
     // Sounding-note tracking for dangling/orphan handling (128 notes,
     // synth channel only — drums are one-shots)
     uint32_t note_on_seen[4] = {0, 0, 0, 0};
+    // Pull-to-bar-line shift of each note's sounding on (0 = not early)
+    uint8_t early_delta[128] = {0};
 
     for(uint32_t i = first; i < head; i++)
     {
         const RingEv ev = ring.At(i);
-        if(ev.tick < start_tick || ev.tick >= end_tick)
+        if(ev.tick < grace_start || ev.tick >= end_tick)
         {
             continue;
         }
+        const bool early = ev.tick < start_tick;
 
         uint8_t type    = ev.status & 0xF0;
         bool    is_on   = type == 0x90 && ev.d2 > 0;
         bool    is_off  = type == 0x80 || (type == 0x90 && ev.d2 == 0);
         uint8_t channel = ev.status & 0x0F;
         bool    synth   = channel != 9; // drum channel one-shots need no offs
+
+        // Grace zone admits notes only: a CC nudge or a stray drum off
+        // just before the bar line wasn't a downbeat
+        if(early && !(is_on || (synth && is_off)))
+        {
+            continue;
+        }
+
+        uint32_t place = ev.tick;
 
         if(synth && is_off)
         {
@@ -138,17 +163,39 @@ inline ExtractResult ExtractWindow(const MidiRing& ring, uint32_t end_tick,
                 continue; // orphan note-off: its note-on predates the window
             }
             note_on_seen[(ev.d1 >> 5) & 3] &= ~bit;
+            // Travels with its (possibly pulled-early) note-on
+            place += early_delta[ev.d1];
+            if(place >= end_tick)
+            {
+                place = end_tick - 1;
+            }
+            early_delta[ev.d1] = 0;
         }
-        if(synth && is_on)
+        if(is_on)
         {
-            note_on_seen[(ev.d1 >> 5) & 3] |= 1u << (ev.d1 & 31);
+            if(early)
+            {
+                place = start_tick; // the downbeat you meant
+                if(synth)
+                {
+                    early_delta[ev.d1] = (uint8_t)(start_tick - ev.tick);
+                }
+            }
+            else if(synth)
+            {
+                early_delta[ev.d1] = 0; // retrigger: stale shift dies
+            }
+            if(synth)
+            {
+                note_on_seen[(ev.d1 >> 5) & 3] |= 1u << (ev.d1 & 31);
+            }
         }
 
         if(n >= max_out)
         {
             break; // full: keep what fits (512 events is a LOT of jamming)
         }
-        out[n++] = {ev.tick % length_ticks, ev.status, ev.d1, ev.d2};
+        out[n++] = {place % length_ticks, ev.status, ev.d1, ev.d2};
     }
 
     // Ring must not have lapped the window while we read it

@@ -2020,7 +2020,8 @@ void ProcessCommand()
 
 int main(void)
 {
-    hw.Init();
+    hw.Init(true); // BOOST: 480 MHz. Default is 400 — we left 20% of
+                   // the chip on the table from Phase 0 until tonight.
     daisy::System::InitBackupSram(); // DBP wait + BKPRAM clock (libDaisy)
     InstallFaultRecorder(); // crash -> record to backup SRAM -> reboot
 
@@ -2059,7 +2060,14 @@ int main(void)
 
     StartWatchdog();
 
-    // FPU flush-to-zero: denormals cause 10-100x DSP slowdowns
+    // FPU flush-to-zero: denormals cause 10-100x DSP slowdowns.
+    // FPSCR covers THIS (thread) context only — on exception entry with
+    // lazy FP stacking, the ISR's FPSCR is loaded from FPDSCR. Without
+    // FZ there, the AUDIO CALLBACK ran with denormals enabled: decaying
+    // reverb tails + released envelopes went subnormal and a 3-note
+    // chord peaked the CPU at 101% (2026-07-06 — the breakup, the
+    // grit, and the starvation livelock, all one register bit).
+    FPU->FPDSCR |= FPU_FPDSCR_FZ_Msk;
     uint32_t fpscr = __get_FPSCR();
     fpscr |= (1 << 24);
     __set_FPSCR(fpscr);

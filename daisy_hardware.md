@@ -15,6 +15,14 @@ WebSerial sees nothing. The build is pinned to **libDaisy v5.4.0**
 That older checkout ships bootloader **v6_3** binaries; the installed
 bootloader (v6_3) is compatible with both.
 
+**Exact pin:** commit `85172e2b` (v5.4.0 + 22, 2024-01-08), verified
+**completely stock — zero local modifications** (2026-07-05). All USB
+workarounds live in this repo's `src/main.cpp` (configured-port transmit
+guard, per-port TX cursor queue, RCC USB core reset), never as libDaisy
+patches. Before filing the v7 issue upstream (Phase 6): test a fresh
+`git clone --recurse-submodules` of current libDaisy to rule out a
+skewed-submodule state in the local v7 checkout.
+
 ## 1. Daisy Seed — Core Hardware
 
 - **MCU**: STM32H750IB, ARM Cortex-M7 @ **480 MHz**, **128 kB internal flash**.

@@ -134,15 +134,20 @@ being listened to; nothing is committed until you approve it after the fact.
 3. The capture window ends at the bar boundary *nearest* the button press —
    pressing a beat late still grabs the phrase you meant.
 
-**Choosing N**: a short press captures the source's preset length (1/2/4/8,
-settable in Bank 4 / the app). **Hold Capture + turn the encoder** to dial a
-different length on the fly — release commits.
+**Choosing N**: per-source preset length (1/2/4/8), set from the app's
+capture strip or the KeyLab Sampler-bank encoders 6/7. (The original
+hold-Capture+encoder gesture is impossible on the KeyLab — its buttons
+emit a single CC with no press/release pair; a Pod-encoder variant is a
+candidate Phase 5 refinement.)
 
-**Choosing the source**: rolling rings are per source (pads / keys / guitar),
-so Capture needs a target. v2: an explicit source-select control next to
-Capture on the hardware; the app additionally offers one-tap per-source
-capture buttons. (Auto-follow-last-played is a candidate refinement — tune
-hands-on; predictability wins ties.)
+**Choosing the source** (as implemented 2026-07-05): the KeyLab **Live
+button (CC 3)** is the one hardware capture trigger — the KeyLab
+transport buttons exist only on its USB DAW port and never reach the
+Pod's DIN input (daisy_hardware.md). **Single press = grab pads+keys**
+(whichever played; silent sources skip quietly), **double press = grab
+guitar**. The 400 ms double-press window costs nothing: the capture
+window is cut at the FIRST press's clock position (retrospective capture
+makes decision latency free). The app offers one-tap per-source buttons.
 
 A bad take never becomes content — you just don't press the button. That is
 what shrinks undo from a core loop into a rare corrective action.
@@ -223,9 +228,11 @@ they roughly halve polyphony per timbre or double CPU.)
 - **Merge/bounce** (K same-length tracks → one, reclaiming (K−1)/K of their
   memory at the cost of separate control) is the future memory valve if pool
   pressure ever demands it — deferred from v2, since the pool is large.
-- The **capture ring** (8 bars, sized for the slowest tempo) is a fixed
+- The **capture ring** (9 bars at the slowest tempo — one bar of margin
+  over the largest window so the CopyJob can never be lapped) is a fixed
   allocation outside the pool; it exists before tempo lock so the first
-  capture works.
+  capture works. Bar **anchors** {tick, sample_pos} recorded at every
+  bar line make the tick↔sample mapping exact by construction.
 - **Memory is a first-class, user-visible resource**, displayed in bars (the
   unit players think in): "23 bars of audio remaining." Slower tempos mean
   bigger bars and fewer of them; the gauge reflects that automatically.
@@ -312,9 +319,9 @@ Guiding rule: **performance-critical actions must be reachable without the
 app**; the app mirrors and extends, never gatekeeps.
 
 - **Keys** → synth (ch 1). **Pads** → drums (ch 10, notes 36–43).
-- **Transport buttons** → play / stop / **Capture** (the record button,
-  repurposed: short press = capture the focused track's preset length;
-  hold + turn encoder = dial the length, release to commit).
+- **Live button (CC 3)** → Capture: single press = pads+keys, double
+  press = guitar. (KeyLab transport buttons never reach the DIN port —
+  DAW-port only. Play/stop/rewind live on the Pod and in the app.)
 - **Bank buttons (Part1/Part2/Live)** → switch encoder/fader bank:
   - Bank 1 *Mix*: track levels + pans + mutes (loop tracks + guitar live
     channel) — mute/unmute is the arrangement move, so it must be instant

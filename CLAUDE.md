@@ -8,9 +8,12 @@ GroovyDaisy is a **campfire jam box**: a Daisy Pod groovebox + looper played
 by several people at once (KeyLab keys → synth, KeyLab pads → drums, guitar →
 audio input/looper), with a React companion app as the visual window.
 
-**SPEC.md is the authoritative design document.** PLAN.md is the historical
-v1 roadmap (superseded). The v2 rewrite is in progress; v1 is preserved at
-git tag `v1-final`.
+**SPEC.md is the authoritative design; ROADMAP.md is the forward plan**
+(phases 4–6 + horizon + feel principles). daisy_hardware.md holds the
+Seed/Pod/bootloader facts and toolchain gotchas. PLAN.md is the historical
+v1 roadmap (superseded). v1 is preserved at git tag `v1-final` and, with
+its full history and extra WIP (arrange UI, freeze), on branch
+`v1-history`.
 
 Core v2 concepts (see SPEC.md for detail):
 - Retrospective capture: always-on rolling buffers; Capture grabs the last
@@ -28,9 +31,10 @@ Core v2 concepts (see SPEC.md for detail):
 # Build firmware (from repo root)
 make
 
-# Flash to Daisy via USB DFU
-# First: hold BOOT, press RESET, release both
+# Flash (Daisy bootloader is installed; app runs from QSPI):
+#   press RESET, then press BOOT while the Seed LED "breathes"
 make program-dfu
+# (One-time bootloader install on a fresh Pod: BOOT+RESET, make program-boot)
 
 # Host-side unit tests (no ARM toolchain needed, runs on macOS)
 make test
@@ -40,11 +44,10 @@ cd companion && npm install && npm run dev
 # Open http://localhost:5173 in Chrome/Edge (requires WebSerial)
 ```
 
-Toolchain: libDaisy/DaisySP are expected at `../DaisyExamples/{libDaisy,DaisySP}`
-(override with `make LIBDAISY_DIR=... DAISYSP_DIR=...`).
-
-**FLASH budget warning:** v1 already uses ~95% of the 128 KB internal flash.
-v2 will need the Daisy bootloader (`APP_TYPE=BOOT_QSPI`) — plan for it.
+Toolchain: **pinned to libDaisy v5.4.0** at `../DaisyExamples2/{libDaisy,DaisySP}`
+(a space-free symlink to "DaisyExamples 2"). Do NOT switch to the newer
+v7.x checkout — its USB middleware breaks CDC enumeration on macOS
+(A/B-verified; details in daisy_hardware.md).
 
 ## Layout
 
@@ -85,10 +88,9 @@ Hard rules for firmware code:
 
 ## Status
 
-v2 rewrite: Phases 0–2.5 complete and hardware-verified (2026-07-05) —
-live instrument core, retrospective MIDI capture with undo, arrange-first
-tabbed UI with count-in/circular time/history rings, dual-port USB with a
-per-port-cursor TX queue. Next: Phase 3, the guitar audio looper (granule
-pool, capture ring, tempo lock). See SPEC.md for the design and
-daisy_hardware.md for the hardware/toolchain gotchas (libDaisy pinned to
-v5.4.0 — v7 breaks USB CDC on macOS).
+v2 rewrite: Phases 0–3 built; 0–2.5 hardware-verified (2026-07-05).
+Phase 3 (guitar audio looper: granule pool, tempo lock, CopyJob,
+waveform lanes, Live double-press = grab guitar) and the
+play-resumes-from-bar-top fix are committed and NOT yet verified with a
+guitar on hardware — that verification is the next action, then Phase 4
+per ROADMAP.md (quantize, swing, CC-automation capture).

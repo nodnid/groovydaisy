@@ -342,12 +342,13 @@ export interface FxMessage {
   dlyFb: number // 0-127
 }
 
-/** Per-strip peak meters + CPU, 10 Hz (Phase 5) */
+/** Per-strip peak meters + CPU, 10 Hz (Phase 5; peak added post-soak) */
 export interface MetersMessage {
   type: typeof MSG_METERS
   masterL: number // 0-127, sqrt taper
   masterR: number
-  cpuPct: number // 0-100
+  cpuPct: number // smoothed average, 0-100
+  cpuPeak: number // worst block since last frame — predicts breakup
   strips: number[] // 36 values, indexed by strip id
 }
 
@@ -940,13 +941,14 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
       break
 
     case MSG_METERS:
-      if (payload.length >= 3) {
+      if (payload.length >= 4) {
         return {
           type: MSG_METERS,
           masterL: payload[0],
           masterR: payload[1],
           cpuPct: payload[2],
-          strips: Array.from(payload.slice(3)),
+          cpuPeak: payload[3],
+          strips: Array.from(payload.slice(4)),
         }
       }
       break

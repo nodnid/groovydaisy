@@ -89,8 +89,12 @@ def pump(dur=0.0):
         time.sleep(0.01)
 
 
-def read_track_data(slot, timeout=2.0):
-    """Latest complete event list + gen for `slot` from MSG_TRACK_DATA."""
+def read_track_data(slot, req_gen=None, timeout=2.0):
+    """Latest complete event list + gen for `slot` from MSG_TRACK_DATA.
+    With req_gen set, explicitly requests the data first (the passive
+    inbox may have been cleared since the commit pushed it)."""
+    if req_gen is not None:
+        send(frame(0xA5, bytes([slot, req_gen])))  # CMD_REQ_TRACK_DATA
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         pump(0.1)
@@ -174,7 +178,11 @@ if drum_slot is None or keys_slot is None:
     sys.exit(1)
 
 # --- 1+2. drum toggle on / off ------------------------------------------------
-gen, ev0 = read_track_data(drum_slot)
+gen, ev0 = read_track_data(drum_slot, req_gen=drum_gen)
+if gen is None:
+    check(False, "drum track data readable")
+    send(frame(CMD_UNDO)); send(frame(CMD_UNDO)); send(frame(CMD_STOP))
+    sys.exit(1)
 n0 = len(ev0)
 inbox.clear()
 edit(drum_slot, gen, EDIT_TOGGLE, 8 * GRID, 42, 90)  # hat on step 8
@@ -191,7 +199,11 @@ check(len(ev2) == n0 and not [e for e in ev2 if e[0] == 8 * GRID and e[2] == 42]
       "same cell toggles OFF", f"events {len(ev1)}->{len(ev2)}")
 
 # --- 3. move the synth note ----------------------------------------------------
-gen, kev = read_track_data(keys_slot)
+gen, kev = read_track_data(keys_slot, req_gen=keys_gen)
+if gen is None:
+    check(False, "keys track data readable")
+    send(frame(CMD_UNDO)); send(frame(CMD_UNDO)); send(frame(CMD_STOP))
+    sys.exit(1)
 ons = [e for e in kev if (e[1] & 0xF0) == 0x90 and e[3] > 0 and e[2] == 60]
 check(len(ons) == 1, "synth take has the note", f"ons {ons}")
 if ons:

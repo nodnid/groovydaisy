@@ -138,6 +138,7 @@ export interface MeterState {
   masterL: number
   masterR: number
   cpuPct: number
+  cpuPeak: number
   strips: number[]
 }
 
@@ -212,7 +213,7 @@ export function getInitialDeviceState(): DeviceState {
     pool: { barsFree: 0, barsTotal: 0 },
     groove: { quantPads: 0, quantKeys: 0, swingPct: 50, velComp: false },
     fx: { revSize: 88, revTone: 96, dlyDiv: 1, dlyFb: 55 },
-    meters: { masterL: 0, masterR: 0, cpuPct: 0, strips: Array(36).fill(0) },
+    meters: { masterL: 0, masterR: 0, cpuPct: 0, cpuPeak: 0, strips: Array(36).fill(0) },
     stats: { midiDrops: 0, ccDrops: 0, txLappedInt: 0, txLappedExt: 0 },
     scenes: { active: 0xff, armed: 0xff, definedMask: 0 },
     captureFlash: null,
@@ -393,6 +394,7 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
           masterL: msg.masterL,
           masterR: msg.masterR,
           cpuPct: msg.cpuPct,
+          cpuPeak: msg.cpuPeak,
           strips: msg.strips,
         },
       }

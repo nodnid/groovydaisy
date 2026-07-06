@@ -67,22 +67,28 @@ if not asked:
     print("• no serial port answered — if the box isn't already in the")
     print("  bootloader, do the dance: RESET, then BOOT while breathing")
 
-# --- 2. wait for DFU -----------------------------------------------------------
-print("• waiting for DFU", end="", flush=True)
-deadline = time.monotonic() + 15
+# --- 2+3. catch the window and flash --------------------------------------------
+# If the INF_TIMEOUT flag stuck (firmware >= 2026-07-06), the bootloader
+# waits forever and the first attempt lands. If it didn't, there's only
+# the ~2.5 s breathe window after the reset — raw dfu-util in a tight
+# loop (no make overhead: ~0.2 s per probe) catches it; once a DFU
+# transaction starts, bootloader activity suppresses the timeout.
+DFU_CMD = ["dfu-util", "-a", "0", "-s", "0x90040000:leave",
+           "-D", os.path.join(REPO, "build", "GroovyDaisy.bin"),
+           "-d", ",0483:df11"]
+print("• chasing the bootloader…")
+deadline = time.monotonic() + 25
+ok = False
 while time.monotonic() < deadline:
-    if dfu_present():
-        print(" — there it is")
+    r = subprocess.run(DFU_CMD, capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    if "Download done" in out:
+        ok = True
+        print("• flashed")
         break
-    print(".", end="", flush=True)
-    time.sleep(0.5)
-else:
-    sys.exit("\nno DFU device appeared — do the RESET+BOOT dance and rerun")
-
-# --- 3. flash -------------------------------------------------------------------
-r = subprocess.run(["make", "program-dfu"], cwd=REPO)
-if r.returncode not in (0, 74):  # dfu-util exits 74 on the leave quirk
-    sys.exit(f"flash failed ({r.returncode})")
+    time.sleep(0.15)
+if not ok:
+    sys.exit("could not catch DFU — do the RESET+BOOT dance and rerun")
 
 # --- 4. proof of life ------------------------------------------------------------
 print("• waiting for the app to wake", end="", flush=True)

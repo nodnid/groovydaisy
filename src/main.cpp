@@ -151,6 +151,16 @@ SpscRing<MidiRouter::Event, 64> cc_from_audio;
 std::atomic<uint8_t> synth_voices_active{0};
 std::atomic<uint8_t> drum_voices_active{0};
 
+// Windowed PEAK block load (the avg meter smiled at 23% while the audio
+// broke up — peaks are what glitch). Callback maxes, main loop reads-
+// and-clears at the meter rate; same unsync contract as strip peaks.
+static float cpu_ticks_per_block_inv = 0.0f; // set in main()
+static float cpu_peak_load           = 0.0f;
+
+// Why did the chip last reset? Captured from RCC_RSR at boot, carried in
+// MSG_HELLO for crash forensics (condensed flags, see main()).
+static uint8_t boot_reset_cause = 0;
+
 // ---------------------------------------------------------------------------
 // Capture recording + sequenced playback glue (audio-callback context)
 // ---------------------------------------------------------------------------
@@ -197,6 +207,7 @@ void AudioCallback(AudioHandle::InputBuffer  in,
                    size_t                    size)
 {
     cpu_meter.OnBlockStart();
+    const uint32_t block_t0 = daisy::System::GetTick();
 
     Clock::TickBlock tb;
     clk.Advance(size, tb);
@@ -320,27 +331,113 @@ void AudioCallback(AudioHandle::InputBuffer  in,
                              std::memory_order_relaxed);
 
     cpu_meter.OnBlockEnd();
+    float load = (float)(daisy::System::GetTick() - block_t0)
+                 * cpu_ticks_per_block_inv;
+    if(load > cpu_peak_load)
+    {
+        cpu_peak_load = load;
+    }
 }
 
 // ---------------------------------------------------------------------------
 // USB CDC plumbing
 // ---------------------------------------------------------------------------
 
-static uint8_t           rx_buffer[256];
-static volatile uint32_t rx_len   = 0;
-static volatile bool     rx_ready = false;
+// RX byte FIFO (IRQ producer, main-loop consumer). The first version was
+// one buffer + a ready flag: a second USB packet arriving before the main
+// loop parsed the first OVERWROTE it mid-parse — under sustained traffic
+// the parser chewed torn streams, and 1-in-256 garbage frames pass an XOR
+// checksum and execute as random commands. Found chasing the frozen-chord
+// crash (2026-07-06). Append-only ring: nothing tears, overflow drops
+// whole tail bytes (counted), the parser only ever sees what was sent.
+static uint8_t               rx_fifo[2048];
+static std::atomic<uint32_t> rx_head{0};
+static std::atomic<uint32_t> rx_tail{0};
+static uint32_t              rx_overflow = 0;
 
 static Protocol::Parser parser;
 
 void UsbReceiveCallback(uint8_t* buf, uint32_t* len)
 {
-    if(*len > 0 && *len < sizeof(rx_buffer))
+    uint32_t h = rx_head.load(std::memory_order_relaxed);
+    uint32_t t = rx_tail.load(std::memory_order_relaxed);
+    for(uint32_t i = 0; i < *len; i++)
     {
-        memcpy((void*)rx_buffer, buf, *len);
-        rx_len   = *len;
-        rx_ready = true;
+        if(h - t >= sizeof(rx_fifo))
+        {
+            rx_overflow++;
+            break; // full: drop the rest, never overwrite unread bytes
+        }
+        rx_fifo[h % sizeof(rx_fifo)] = buf[i];
+        h++;
     }
+    rx_head.store(h, std::memory_order_release);
 }
+
+// ---------------------------------------------------------------------------
+// HardFault flight recorder: capture the faulting PC + fault status into
+// backup SRAM (survives a software reset), then REBOOT — a gig crash
+// recovers in ~3 s instead of freezing on a droning DMA buffer. The
+// record is reported via MSG_DEBUG in the next snapshot. Best effort:
+// magic and fault regs are written before touching the (possibly bad)
+// exception stack.
+// ---------------------------------------------------------------------------
+
+struct FaultRecord
+{
+    uint32_t magic; // 0xFA17FA17 = valid record
+    uint32_t pc;
+    uint32_t lr;
+    uint32_t cfsr;
+    uint32_t bfar;
+};
+static volatile FaultRecord* const fault_rec
+    = (volatile FaultRecord*)(0x38800000UL + 0x80UL); // past boot_info
+
+extern "C" void HardFault_C(uint32_t* stack)
+{
+    // Backup-domain access was armed at boot (InitBackupSram) — no
+    // register sequencing here, where a second fault means lockup.
+    fault_rec->cfsr  = SCB->CFSR;
+    fault_rec->bfar  = SCB->BFAR;
+    fault_rec->pc    = stack[6]; // stacked PC (may itself be garbage)
+    fault_rec->lr    = stack[5];
+    fault_rec->magic = 0xFA17FA17; // last: a partial record never lies
+    HAL_NVIC_SystemReset();
+}
+
+// libDaisy owns the HardFault_Handler symbol (a debugger spin loop — the
+// frozen chord). We take the vector instead: copy the table to RAM,
+// patch entry 3, repoint VTOR. No symbol collision, full control.
+extern "C" __attribute__((naked)) void FaultRecorder_Handler(void)
+{
+    __asm volatile("tst lr, #4      \n"
+                   "ite eq          \n"
+                   "mrseq r0, msp   \n"
+                   "mrsne r0, psp   \n"
+                   "b HardFault_C   \n");
+}
+
+static uint32_t ram_vectors[166] __attribute__((aligned(1024)));
+
+static void InstallFaultRecorder()
+{
+    const uint32_t* src = (const uint32_t*)SCB->VTOR;
+    for(int i = 0; i < 166; i++)
+    {
+        ram_vectors[i] = src[i];
+    }
+    ram_vectors[3] = (uint32_t)&FaultRecorder_Handler; // HardFault
+    __disable_irq();
+    SCB->VTOR = (uint32_t)ram_vectors;
+    __DSB();
+    __ISB();
+    __enable_irq();
+}
+
+// Last run's crash, picked up at boot for the snapshot report
+static FaultRecord last_fault;
+static bool        have_last_fault = false;
 
 // libDaisy's CDC_Transmit_FS/HS dereference the CDC class pointer with NO
 // null check (usbd_cdc_if.c), and that pointer only exists while a host
@@ -541,7 +638,7 @@ void SendScene();
 /** Full snapshot: everything the companion needs to cold-join. */
 void SendSnapshot()
 {
-    ui.Hello();
+    ui.Hello(boot_reset_cause);
     SendTransport();
     ui.Sync(clk.NowTick());
     ui.Voices(synth_voices_active.load(std::memory_order_relaxed),
@@ -560,6 +657,16 @@ void SendSnapshot()
     SendGroove();
     SendFx();
     SendScene();
+    if(have_last_fault)
+    {
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 "HARDFAULT last run: pc=%08lX lr=%08lX cfsr=%08lX bfar=%08lX",
+                 (unsigned long)last_fault.pc, (unsigned long)last_fault.lr,
+                 (unsigned long)last_fault.cfsr,
+                 (unsigned long)last_fault.bfar);
+        ui.Debug(msg);
+    }
     for(int i = 0; i < Track::MAX_TRACKS; i++)
     {
         if(registry.Get(i).active.load())
@@ -756,16 +863,20 @@ void SendFx()
 /** The one sanctioned streaming message: peaks + CPU at 10 Hz. */
 void SendMeters()
 {
-    uint8_t p[3 + Mixer::NUM_STRIPS];
+    uint8_t p[4 + Mixer::NUM_STRIPS];
     float   ml, mr;
     mixer.ReadMasterPeaks(ml, mr);
     p[0] = Mixer::PeakToCc(ml);
     p[1] = Mixer::PeakToCc(mr);
     float cpu = cpu_meter.GetAvgCpuLoad() * 100.0f;
     p[2] = cpu > 127.0f ? 127 : (uint8_t)(cpu + 0.5f);
+    // Windowed PEAK load: the number that predicts breakup
+    float peak    = cpu_peak_load * 100.0f;
+    cpu_peak_load = 0.0f;
+    p[3] = peak > 127.0f ? 127 : (uint8_t)(peak + 0.5f);
     for(int i = 0; i < Mixer::NUM_STRIPS; i++)
     {
-        p[3 + i] = Mixer::PeakToCc(mixer.ReadPeak(i));
+        p[4 + i] = Mixer::PeakToCc(mixer.ReadPeak(i));
     }
     ui.Send(Protocol::MSG_METERS, p, sizeof(p));
 }
@@ -1820,6 +1931,8 @@ void ProcessCommand()
                 // bootloader and wait for DFU forever (a power cycle
                 // recovers if no flash comes). Audio stops here — this
                 // is a bench command, never a performance one.
+                // Backup-domain access armed at boot; the INF_TIMEOUT
+                // flag write sticks.
                 daisy::System::ResetToBootloader(
                     daisy::System::BootloaderMode::DAISY_INFINITE_TIMEOUT);
             }
@@ -1864,6 +1977,36 @@ void ProcessCommand()
 int main(void)
 {
     hw.Init();
+    daisy::System::InitBackupSram(); // DBP wait + BKPRAM clock (libDaisy)
+    InstallFaultRecorder(); // crash -> record to backup SRAM -> reboot
+
+    // Reset forensics: bit0=pin, bit1=BOR (brownout!), bit2=software,
+    // bit3=power-on, bit4=window-watchdog, bit5=independent-watchdog,
+    // bit6=low-power. Cleared after reading so each boot reports itself.
+    {
+        uint32_t rsr = RCC->RSR;
+        boot_reset_cause = ((rsr & RCC_RSR_PINRSTF) ? 0x01 : 0)
+                           | ((rsr & RCC_RSR_BORRSTF) ? 0x02 : 0)
+                           | ((rsr & RCC_RSR_SFTRSTF) ? 0x04 : 0)
+                           | ((rsr & RCC_RSR_PORRSTF) ? 0x08 : 0)
+                           | ((rsr & RCC_RSR_WWDG1RSTF) ? 0x10 : 0)
+                           | ((rsr & RCC_RSR_IWDG1RSTF) ? 0x20 : 0)
+                           | ((rsr & RCC_RSR_LPWRRSTF) ? 0x40 : 0);
+        RCC->RSR |= RCC_RSR_RMVF;
+    }
+
+    // Flight-recorder pickup: a software reset with a fault record means
+    // the LAST run hard-faulted and rebooted itself. Stash for the
+    // snapshot report, then clear so each crash reports once.
+    {
+        if(fault_rec->magic == 0xFA17FA17)
+        {
+            last_fault       = *(const FaultRecord*)fault_rec;
+            have_last_fault  = true;
+            fault_rec->magic = 0;
+            boot_reset_cause |= 0x80; // "previous run crashed" flag
+        }
+    }
 
     // FPU flush-to-zero: denormals cause 10-100x DSP slowdowns
     uint32_t fpscr = __get_FPSCR();
@@ -1926,6 +2069,10 @@ int main(void)
     cc_engine.Init();
     ui.Init(UsbSendRaw);
     cpu_meter.Init(hw.AudioSampleRate(), hw.AudioBlockSize());
+    cpu_ticks_per_block_inv
+        = 1.0f
+          / ((float)daisy::System::GetTickFreq()
+             * ((float)hw.AudioBlockSize() / hw.AudioSampleRate()));
 
     sampler.LoadSample(0, sample_bank.kick, DrumSamples::KICK_LENGTH, "Kick");
     sampler.LoadSample(1, sample_bank.snare, DrumSamples::SNARE_LENGTH, "Snare");
@@ -2216,16 +2363,18 @@ int main(void)
         // ------------------------------------------------------------------
         // USB protocol input
         // ------------------------------------------------------------------
-        if(rx_ready)
         {
-            for(uint32_t i = 0; i < rx_len; i++)
+            uint32_t h = rx_head.load(std::memory_order_acquire);
+            uint32_t t = rx_tail.load(std::memory_order_relaxed);
+            while(t != h)
             {
-                if(parser.Feed(rx_buffer[i]))
+                if(parser.Feed(rx_fifo[t % sizeof(rx_fifo)]))
                 {
                     ProcessCommand();
                 }
+                t++;
             }
-            rx_ready = false;
+            rx_tail.store(t, std::memory_order_release);
         }
 
         // ------------------------------------------------------------------

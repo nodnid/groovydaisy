@@ -48,10 +48,13 @@ class Publisher
         send_(tx_, n);
     }
 
-    void Hello()
+    /** reset_cause: raw RCC_RSR flag byte captured at boot (crash
+     *  forensics — 0 after a clean power-up report clear). */
+    void Hello(uint8_t reset_cause = 0)
     {
-        uint8_t p[3] = {Protocol::PROTO_VER, FW_MAJOR, FW_MINOR};
-        Send(Protocol::MSG_HELLO, p, 3);
+        uint8_t p[4] = {Protocol::PROTO_VER, FW_MAJOR, FW_MINOR,
+                        reset_cause};
+        Send(Protocol::MSG_HELLO, p, 4);
     }
 
     void Transport(bool playing, bool tempo_locked, float bpm, bool preroll)

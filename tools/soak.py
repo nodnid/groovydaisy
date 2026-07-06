@@ -68,7 +68,9 @@ send = lambda b: os.write(fd, b)
 stats = {
     "hello_reboots": 0,
     "checksum_errors": 0,
-    "ring_drop_frames": 0,
+    "midi_drops": 0,
+    "cc_drops": 0,
+    "tx_laps": 0,
     "cpu_max": 0,
     "errors": {},
     "captures_ok": 0,
@@ -121,10 +123,13 @@ def pump(dur=0.0):
 def handle(t, p):
     if t == MSG_HELLO and started:
         stats["hello_reboots"] += 1  # the box came back from the dead
-    elif t == MSG_METERS and len(p) >= 3:
-        stats["cpu_max"] = max(stats["cpu_max"], p[2])
-    elif t == MSG_STATS:
-        stats["ring_drop_frames"] += 1
+    elif t == MSG_METERS and len(p) >= 4:
+        stats["cpu_max"] = max(stats["cpu_max"], p[3])  # true windowed peak
+    elif t == MSG_STATS and len(p) >= 16:
+        u32 = lambda o: p[o] | (p[o+1] << 8) | (p[o+2] << 16) | (p[o+3] << 24)
+        stats["midi_drops"] = max(stats["midi_drops"], u32(0))
+        stats["cc_drops"] = max(stats["cc_drops"], u32(4))
+        stats["tx_laps"] = max(stats["tx_laps"], u32(8) + u32(12))
     elif t == MSG_ERROR and len(p) >= 1:
         stats["errors"][p[0]] = stats["errors"].get(p[0], 0) + 1
     elif t == MSG_CAPTURE and len(p) >= 6:
@@ -192,11 +197,16 @@ while time.monotonic() < end_time:
         events.append((bar_start + k * 2 * s16, 0xB0, 74, v))
     events.sort(key=lambda e: e[0])
 
-    for t, st, d1, d2 in events:
-        now = time.monotonic()
-        if t > now:
-            pump(t - now)  # read while waiting
-        inject(st, d1, d2)
+    try:
+        for t, st, d1, d2 in events:
+            now = time.monotonic()
+            if t > now:
+                pump(t - now)  # read while waiting
+            inject(st, d1, d2)
+    except OSError:
+        print("\n[FAIL] the box LEFT THE BUS mid-soak (crash or physical "
+              "reset) — this is the one unforgivable failure")
+        sys.exit(1)
 
     bar_idx += 1
 
@@ -242,7 +252,7 @@ while time.monotonic() < end_time:
         print(f"  • {left:.0f} min left — sent {stats['sent']}, "
               f"captures {stats['captures_ok']}, edits {stats['edits']}, "
               f"cpu max {stats['cpu_max']}%, "
-              f"drops {stats['ring_drop_frames']}, "
+              f"drops {stats['midi_drops']}/{stats['cc_drops']}, "
               f"cksum {stats['checksum_errors']}, "
               f"reboots {stats['hello_reboots']}")
 
@@ -266,8 +276,9 @@ def check(cond, label, detail=""):
 
 check(stats["hello_reboots"] == 0, "no reboots (the box never crashed)",
       f"{stats['hello_reboots']}")
-check(stats["ring_drop_frames"] == 0, "no ring drops",
-      f"{stats['ring_drop_frames']} MSG_STATS frames")
+check(stats["midi_drops"] == 0 and stats["cc_drops"] == 0, "no ring drops",
+      f"midi {stats['midi_drops']}, cc {stats['cc_drops']} "
+      f"(deaf-port tx laps: {stats['tx_laps']}, by design)")
 check(stats["checksum_errors"] == 0, "clean wire",
       f"{stats['checksum_errors']} checksum errors")
 check(stats["cpu_max"] < 95, "CPU headroom held",

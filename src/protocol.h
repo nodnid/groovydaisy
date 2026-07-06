@@ -59,7 +59,7 @@
 namespace Protocol
 {
 
-constexpr uint8_t PROTO_VER = 4; // 4: FX + meters (Phase 5)
+constexpr uint8_t PROTO_VER = 5; // 5: cpu_peak in MSG_METERS
 
 // Sync byte
 constexpr uint8_t SYNC_BYTE = 0xAA;
@@ -116,9 +116,11 @@ constexpr uint8_t MSG_POOL        = 0x20;
 //   (Phase 5); CC scale except dly_div = index into Fx::DIV_16THS.
 //   Sent on change and in the snapshot.
 constexpr uint8_t MSG_FX          = 0x21;
-// MSG_METERS: [master_l][master_r][cpu_pct][36 strip peaks] — 10 Hz.
-//   Peaks are sqrt-tapered u8 (mixer.h PeakToCc); the one sanctioned
-//   streaming message (SPEC.md Phase 5 meters).
+// MSG_METERS: [master_l][master_r][cpu_avg][cpu_peak][36 strip peaks] —
+//   10 Hz. cpu_peak is the windowed WORST block since the last meter
+//   frame (the number that predicts breakup; the avg smiles through
+//   glitches). Peaks are sqrt-tapered u8 (mixer.h PeakToCc); the one
+//   sanctioned streaming message (SPEC.md Phase 5 meters).
 constexpr uint8_t MSG_METERS      = 0x22;
 // MSG_STATS: [midi_drops:4][cc_drops:4][tx_lapped_int:4][tx_lapped_ext:4]
 //   (all LE, cumulative) — ring-drop diagnostics (Phase 6 giggability).

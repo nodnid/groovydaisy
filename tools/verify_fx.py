@@ -136,8 +136,10 @@ pump(1.2)
 meter_frames = [(ts, p) for ts, t, p in inbox if t == MSG_METERS]
 rate = len(meter_frames) / 1.2
 cpu = meter_frames[-1][1][2] if meter_frames else 255
+cpu_pk = max(p[3] for _, p in meter_frames) if meter_frames else 255
 check(8 <= rate <= 12, "meters stream ~10 Hz", f"{rate:.1f} Hz")
-check(cpu < 90, "CPU headroom with reverb running", f"{cpu}%")
+check(cpu < 90 and cpu_pk < 95, "CPU headroom with reverb running",
+      f"avg {cpu}%, peak {cpu_pk}%")
 
 # --- 3+4. reverb tail & delay echoes ----------------------------------------
 send(frame(CMD_PLAY))
@@ -151,9 +153,9 @@ def master_trace(dur):
     send(frame(CMD_MIDI_INJECT, bytes([0x99, 36, 127])))
     pump(dur)
     return [
-        (int((ts - t0) * 1000), p[0], p[3 + STRIP_DRUMS])
+        (int((ts - t0) * 1000), p[0], p[4 + STRIP_DRUMS])
         for ts, t, p in inbox
-        if t == MSG_METERS and len(p) > 3 + STRIP_DRUMS
+        if t == MSG_METERS and len(p) > 4 + STRIP_DRUMS
     ]
 
 
@@ -211,10 +213,19 @@ if fx0 is not None:
     for i in range(4):
         send(frame(CMD_FX, bytes([i, fx0[i]])))
 
-# --- 6. no ring drops through all of it --------------------------------------
+# --- 6. no REAL ring drops through all of it ----------------------------------
+# TX laps on the OTHER CDC port are by-design (a deaf-but-enumerated port
+# only lap-drops its own copies — main.cpp TX queue); only midi/cc drops
+# mean the instrument lost events.
 stats = last_of(MSG_STATS)
-check(stats is None, "no ring drops during the whole test",
-      "" if stats is None else f"stats payload {list(stats)}")
+if stats is None:
+    check(True, "no ring drops during the whole test")
+else:
+    u32 = lambda o: stats[o] | (stats[o+1] << 8) | (stats[o+2] << 16) | (stats[o+3] << 24)
+    midi_d, cc_d = u32(0), u32(4)
+    check(midi_d == 0 and cc_d == 0, "no ring drops during the whole test",
+          f"midi {midi_d}, cc {cc_d} (tx laps int/ext {u32(8)}/{u32(12)} "
+          f"= deaf-port shedding, by design)")
 
 print("=========================================")
 if failures:

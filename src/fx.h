@@ -52,13 +52,24 @@ class Engine
     void Init(float sample_rate)
     {
         sample_rate_ = sample_rate;
-        verb_.Init(sample_rate);
+        // HALF-RATE reverb (CPU headroom, found in the first soak: audio
+        // broke up under full load): the reverb sees every other sample
+        // (two inputs averaged in, outputs held two samples). Init at
+        // sr/2 so its internal delay times stay correct in real time.
+        // Slightly darker, half the cost — campfire-appropriate.
+        verb_.Init(sample_rate * 0.5f);
+        rev_phase_  = 0;
+        rev_accum_  = 0.0f;
+        rev_wl_     = 0.0f;
+        rev_wr_     = 0.0f;
+        rev_active_ = 0;
+        dly_active_ = 0;
         dly_l_.Init();
         dly_r_.Init();
 
         // Defaults tuned by ear-in-advance; the feel test refines them
         SetRevSize(88); // feedback ~0.86: a generous room, not a cave
-        SetRevTone(96); // ~8 kHz lowpass: warm, not dull
+        SetRevTone(96); // warm, not dull
         SetDelayDiv(1); // dotted 8th
         SetDelayFb(55); // two or three audible repeats
 
@@ -81,8 +92,9 @@ class Engine
     void SetRevTone(uint8_t cc)
     {
         rev_tone_cc_ = cc;
-        // 800 Hz .. 16 kHz, log taper
-        verb_.SetLpFreq(800.0f * powf(20.0f, (float)cc / 127.0f));
+        // 800 Hz .. 11 kHz, log taper (the reverb runs at sr/2: keep the
+        // lowpass under its Nyquist)
+        verb_.SetLpFreq(800.0f * powf(13.75f, (float)cc / 127.0f));
     }
 
     void SetDelayDiv(uint8_t idx)
@@ -114,25 +126,79 @@ class Engine
     /**
      * Audio callback, once per sample: consume the mono send buses and
      * add the wet returns to the master bus.
+     *
+     * CPU discipline (post-soak): the reverb runs half-rate; both units
+     * SLEEP when their input and audible content are gone — a silent
+     * delay/reverb costs nothing. Sleeping freezes the rings; whatever
+     * remains in them is below -80 dB by construction, so waking never
+     * replays anything audible.
      */
     inline void Process(float rev_in, float dly_in, float& l, float& r)
     {
-        // Slew the delay time (~50 ms) — tempo changes bend, never click
-        delay_samples_ += 0.0004f * (delay_target_ - delay_samples_);
-        dly_l_.SetDelay(delay_samples_);
-        dly_r_.SetDelay(delay_samples_);
+        constexpr float AUDIBLE = 1e-4f; // ~-80 dBFS
 
-        // Ping-pong: input enters left; each repeat crosses sides
-        float dl = dly_l_.Read();
-        float dr = dly_r_.Read();
-        dly_l_.Write(dly_in + dr * dly_fb_);
-        dly_r_.Write(dl * dly_fb_);
+        // Slew the delay time (~50 ms) — tempo changes bend, never
+        // click. Steady state skips the per-sample SetDelay math.
+        if(delay_samples_ != delay_target_)
+        {
+            delay_samples_ += 0.0004f * (delay_target_ - delay_samples_);
+            if(fabsf(delay_target_ - delay_samples_) < 0.01f)
+            {
+                delay_samples_ = delay_target_;
+            }
+            dly_l_.SetDelay(delay_samples_);
+            dly_r_.SetDelay(delay_samples_);
+        }
 
-        float wl, wr;
-        verb_.Process(rev_in, rev_in, &wl, &wr);
+        // --- ping-pong delay (sleeps when quiet) -------------------------
+        bool fed = fabsf(dly_in) > AUDIBLE;
+        if(dly_active_ > 0 || fed)
+        {
+            float dl = dly_l_.Read();
+            float dr = dly_r_.Read();
+            dly_l_.Write(dly_in + dr * dly_fb_);
+            dly_r_.Write(dl * dly_fb_);
+            l += dl;
+            r += dr;
+            if(fed || fabsf(dl) > AUDIBLE || fabsf(dr) > AUDIBLE)
+            {
+                // must stay awake one full delay period past the last
+                // audible sample: a repeat may still be in flight
+                dly_active_ = (uint32_t)delay_samples_ + 4800;
+            }
+            else if(dly_active_ > 0)
+            {
+                dly_active_--;
+            }
+        }
 
-        l += wl + dl;
-        r += wr + dr;
+        // --- reverb, half-rate (sleeps when quiet) -----------------------
+        bool rev_fed = fabsf(rev_in) > AUDIBLE;
+        if(rev_active_ > 0 || rev_fed)
+        {
+            rev_accum_ += rev_in;
+            if(rev_phase_ == 0)
+            {
+                rev_phase_ = 1;
+            }
+            else
+            {
+                float in = rev_accum_ * 0.5f;
+                verb_.Process(in, in, &rev_wl_, &rev_wr_);
+                rev_accum_ = 0.0f;
+                rev_phase_ = 0;
+            }
+            l += rev_wl_;
+            r += rev_wr_;
+            if(rev_fed || fabsf(rev_wl_) > AUDIBLE || fabsf(rev_wr_) > AUDIBLE)
+            {
+                rev_active_ = 6 * 48000; // generous: the longest tail
+            }
+            else if(rev_active_ > 0)
+            {
+                rev_active_--;
+            }
+        }
     }
 
   private:
@@ -142,13 +208,19 @@ class Engine
     daisysp::DelayLine<float, DELAY_MAX> dly_l_;
     daisysp::DelayLine<float, DELAY_MAX> dly_r_;
 
-    float   delay_samples_;
-    float   delay_target_;
-    float   dly_fb_;
-    uint8_t div_idx_;
-    uint8_t rev_size_cc_;
-    uint8_t rev_tone_cc_;
-    uint8_t dly_fb_cc_;
+    float    delay_samples_;
+    float    delay_target_;
+    float    dly_fb_;
+    uint32_t dly_active_; // samples of delay wakefulness left
+    uint32_t rev_active_; // samples of reverb wakefulness left
+    float    rev_accum_;  // half-rate input averaging
+    float    rev_wl_;     // held half-rate outputs
+    float    rev_wr_;
+    uint8_t  rev_phase_;
+    uint8_t  div_idx_;
+    uint8_t  rev_size_cc_;
+    uint8_t  rev_tone_cc_;
+    uint8_t  dly_fb_cc_;
 };
 
 } // namespace Fx

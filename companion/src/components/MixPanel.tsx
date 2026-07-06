@@ -259,10 +259,11 @@ export default function MixPanel({
           </h2>
           <span
             className={`text-xs font-mono ${
-              meters.cpuPct > 80 ? 'text-groove-red' : 'text-groove-muted'
+              meters.cpuPeak > 85 ? 'text-groove-red' : 'text-groove-muted'
             }`}
+            title="average / worst block — the peak is what glitches"
           >
-            CPU {meters.cpuPct}%
+            CPU {meters.cpuPct}% / {meters.cpuPeak}% pk
           </span>
         </div>
         <div className="flex gap-6 flex-wrap items-end">

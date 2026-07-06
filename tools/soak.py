@@ -155,6 +155,9 @@ def inject(status, d1, d2):
 
 
 # --- setup -----------------------------------------------------------------------
+# SILENT soak: master to zero — the DSP load is identical and nobody's
+# 3 AM is disturbed. Restored at teardown.
+send(frame(0x88, bytes([0xFF, 0, 0])))
 send(frame(CMD_STOP)); pump(0.1)
 send(frame(CMD_REWIND)); pump(0.1)
 send(frame(CMD_REQ_STATE))
@@ -261,6 +264,7 @@ for _ in range(len(stats["tracks_live"]) + 2):
     send(frame(CMD_UNDO))
     pump(0.1)
 send(frame(CMD_STOP))
+send(frame(0x88, bytes([0xFF, 0, 108])))  # master restored
 pump(0.5)
 
 print("\n================ SOAK VERDICT ================")

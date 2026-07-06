@@ -20,6 +20,7 @@
 #include <atomic>
 #include "daisy_pod.h"
 #include "daisysp.h"
+#include "itcm.h"
 #include "protocol.h"
 #include "clock.h"
 #include "rt_queue.h"
@@ -202,6 +203,7 @@ void SeqDispatch(uint8_t status, uint8_t d1, uint8_t d2, float vel_scale)
 // Audio callback
 // ---------------------------------------------------------------------------
 
+ITCM_TEXT
 void AudioCallback(AudioHandle::InputBuffer  in,
                    AudioHandle::OutputBuffer out,
                    size_t                    size)
@@ -2022,6 +2024,15 @@ int main(void)
 {
     hw.Init(true); // BOOST: 480 MHz. Default is 400 — we left 20% of
                    // the chip on the table from Phase 0 until tonight.
+
+    // Copy the hot DSP into zero-wait ITCM before anything calls it
+    // (AudioCallback isn't registered until StartAudio, below)
+    {
+        extern uint32_t _sitcm_text, _eitcm_text, _sitcm_load;
+        size_t n = (size_t)((uint8_t*)&_eitcm_text - (uint8_t*)&_sitcm_text);
+        memcpy((void*)&_sitcm_text, (const void*)&_sitcm_load, n);
+        __ISB(); // ITCM is uncached; just make the prefetch see it
+    }
     daisy::System::InitBackupSram(); // DBP wait + BKPRAM clock (libDaisy)
     InstallFaultRecorder(); // crash -> record to backup SRAM -> reboot
 

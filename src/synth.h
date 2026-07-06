@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include "daisysp.h"
+#include "itcm.h"
 
 /**
  * GroovyDaisy 6-Voice Polyphonic Synthesizer
@@ -471,7 +472,7 @@ class Engine
     /**
      * Process all voices and return mono output
      */
-    float Process()
+    ITCM_INLINE float Process()
     {
         float out = 0.0f;
         active_count_ = 0;
@@ -577,7 +578,7 @@ class Engine
     /**
      * Process all voices and return stereo output with panning
      */
-    void ProcessStereo(float* out_left, float* out_right)
+    ITCM_INLINE void ProcessStereo(float* out_left, float* out_right)
     {
         float mono = Process();  // Get mono sum
 

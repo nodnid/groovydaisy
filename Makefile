@@ -27,6 +27,10 @@ DAISYSP_DIR ?= ../DaisyExamples2/DaisySP
 # prebuilt libdaisysp-lgpl.a and the core Makefile wires it on this flag
 USE_DAISYSP_LGPL = 1
 
+# Custom linker script: stock QSPI script + an .itcm_text section that
+# runs the hot DSP from zero-wait ITCM (ROADMAP "the CPU budget")
+LDSCRIPT = ./STM32H750IB_qspi_itcm.lds
+
 # Project includes
 C_INCLUDES += -Isrc
 

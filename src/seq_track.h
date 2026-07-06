@@ -6,6 +6,7 @@
 #include "track.h"
 #include "mixer.h"
 #include "groove.h"
+#include "itcm.h"
 
 /**
  * MIDI loop-track playback (v2).
@@ -60,7 +61,7 @@ inline void ReleaseNotes(Track::Slot& s, DispatchFn dispatch)
  * live_cc: current knob values in Groove::AUTO_CCS order (may be null:
  * CC events then play back unblended).
  */
-inline void ProcessTick(Track::Registry& reg, Mixer::Engine& mixer,
+ITCM_INLINE inline void ProcessTick(Track::Registry& reg, Mixer::Engine& mixer,
                         uint32_t global_tick, DispatchFn dispatch,
                         uint8_t swing_ticks = 0,
                         const uint8_t* live_cc = nullptr)

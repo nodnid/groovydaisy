@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <cmath>
 #include "daisysp.h"
+#include "itcm.h"
 
 /**
  * GroovyDaisy send FX (Phase 5): one shared reverb + one tempo-synced
@@ -129,7 +130,7 @@ class Engine
      * remains in them is below -80 dB by construction, so waking never
      * replays anything audible.
      */
-    inline void Process(float rev_in, float dly_in, float& l, float& r)
+    ITCM_INLINE inline void Process(float rev_in, float dly_in, float& l, float& r)
     {
         constexpr float AUDIBLE = 1e-4f; // ~-80 dBFS
 

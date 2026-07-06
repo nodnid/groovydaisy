@@ -3,6 +3,7 @@
 #define GROOVYDAISY_SAMPLER_H
 
 #include <stdint.h>
+#include "itcm.h"
 #include <stddef.h>
 
 /**
@@ -84,7 +85,7 @@ struct DrumVoice
     /**
      * Process one sample of output
      */
-    float Process()
+    ITCM_INLINE float Process()
     {
         if(!playing || sample_data == nullptr)
         {
@@ -199,7 +200,7 @@ class Engine
     /**
      * Process all voices and return mono mixed output (legacy)
      */
-    float Process()
+    ITCM_INLINE float Process()
     {
         float out    = 0.0f;
         active_count_ = 0;
@@ -221,7 +222,7 @@ class Engine
      * @param out_left  Pointer to left channel output
      * @param out_right Pointer to right channel output
      */
-    void ProcessStereo(float* out_left, float* out_right)
+    ITCM_INLINE void ProcessStereo(float* out_left, float* out_right)
     {
         float left  = 0.0f;
         float right = 0.0f;

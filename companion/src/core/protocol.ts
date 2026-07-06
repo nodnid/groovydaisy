@@ -32,6 +32,7 @@ export const MSG_CAPTURE = 0x12
 export const MSG_TRACK_DATA = 0x13
 export const MSG_SRC_ACTIVITY = 0x14
 export const MSG_AUDIO_PEAKS = 0x15
+export const MSG_GROOVE = 0x16
 export const MSG_POOL = 0x20
 export const MSG_DEBUG = 0xff
 
@@ -54,6 +55,18 @@ export const CMD_UNDO = 0xa1
 export const CMD_TRACK_DELETE = 0xa2
 export const CMD_SRC_LEN = 0xa3
 export const CMD_REQ_TRACK_DATA = 0xa5
+export const CMD_GROOVE = 0xa6
+
+// CMD_GROOVE param ids (mirrors protocol.h)
+export const GROOVE_QUANT_PADS = 0
+export const GROOVE_QUANT_KEYS = 1
+export const GROOVE_SWING = 2
+export const GROOVE_VEL_COMP = 3
+
+// Quantize modes
+export const QUANT_OFF = 0
+export const QUANT_LIGHT = 1
+export const QUANT_HARD = 2
 
 // Capture sources
 export const SRC_PADS = 0
@@ -291,6 +304,15 @@ export interface PoolMessage {
   barsTotal: number // 0 = pool unlocked (no audio loops, tempo free)
 }
 
+/** Groove settings (Phase 4): quantize at capture, swing at playback */
+export interface GrooveMessage {
+  type: typeof MSG_GROOVE
+  quantPads: number // QUANT_OFF | QUANT_LIGHT | QUANT_HARD
+  quantKeys: number
+  swingPct: number // 50..75, 50 = straight
+  velComp: boolean // drum-capture velocity compression
+}
+
 // Synth parameters - mirrors SynthParams struct in synth.h
 export interface SynthParams {
   osc1Wave: number
@@ -345,6 +367,7 @@ export type ParsedMessage =
   | TrackDataMessage
   | SrcActivityMessage
   | AudioPeaksMessage
+  | GrooveMessage
   | PoolMessage
 
 // Parser state
@@ -467,6 +490,11 @@ export function buildSrcLenCommand(source: number, bars: number): Uint8Array {
 
 export function buildReqTrackDataCommand(slot: number, gen: number): Uint8Array {
   return buildMessage(CMD_REQ_TRACK_DATA, new Uint8Array([slot, gen]))
+}
+
+/** Set one groove parameter (GROOVE_* param ids); firmware echoes MSG_GROOVE. */
+export function buildGrooveCommand(param: number, value: number): Uint8Array {
+  return buildMessage(CMD_GROOVE, new Uint8Array([param, value]))
 }
 
 /** Play the box from the Mac: inject a MIDI event over the serial link. */
@@ -784,6 +812,18 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
       }
       break
 
+    case MSG_GROOVE:
+      if (payload.length >= 4) {
+        return {
+          type: MSG_GROOVE,
+          quantPads: payload[0],
+          quantKeys: payload[1],
+          swingPct: payload[2],
+          velComp: payload[3] !== 0,
+        }
+      }
+      break
+
     case MSG_ENGINE_MIX:
       // [drum_levels:8][drum_pans:8][drum_master][synth_level][synth_pan][synth_master][master_out]
       if (payload.length >= 21) {
@@ -956,6 +996,8 @@ export function getMessageTypeName(type: number): string {
       return 'SRC_ACTIVITY'
     case MSG_AUDIO_PEAKS:
       return 'AUDIO_PEAKS'
+    case MSG_GROOVE:
+      return 'GROOVE'
     case MSG_POOL:
       return 'POOL'
     case MSG_DEBUG:

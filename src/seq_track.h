@@ -5,17 +5,27 @@
 #include <stdint.h>
 #include "track.h"
 #include "mixer.h"
+#include "groove.h"
 
 /**
  * MIDI loop-track playback (v2).
  *
  * Runs per tick inside the audio callback. Every active MIDI track plays
- * its events where `global_tick % length == event.tick` — same-length
- * tracks are inherently phase-aligned (SPEC.md track model).
+ * its events where `global_tick % length == SwingWarp(event.tick)` —
+ * same-length tracks are inherently phase-aligned (SPEC.md track model),
+ * and swing (Phase 4) is a playback-time warp of the comparison, never a
+ * mutation of stored events: non-destructive and live-tweakable. The warp
+ * is monotonic, so the sorted event array stays dispatch-ordered; a
+ * mid-bar swing change can shift an event behind the playhead, which the
+ * `<=` dispatch catches late rather than dropping (note-offs must land).
  *
  * Strip semantics for MIDI tracks (SPEC decision 7): level scales note-on
  * velocity, mute suppresses dispatch. Mute/delete transitions release the
  * track's sounding synth notes so nothing hangs.
+ *
+ * CC events (0xB0, Phase 4 automation) dispatch with the blend applied:
+ * effective = recorded + (live_cc - cc_base), so live knob turns ride on
+ * top of recorded motion (SPEC.md CC automation).
  *
  * Host-testable: dispatch is injected as a callback, so this header pulls
  * in no engine/DaisySP dependencies.
@@ -45,9 +55,15 @@ inline void ReleaseNotes(Track::Slot& s, DispatchFn dispatch)
 /**
  * Advance one tick of playback across all MIDI tracks.
  * Audio-callback context — no allocation, bounded work.
+ *
+ * swing_ticks: 0 (straight) .. Groove::MAX_SWING_TICKS (75% shuffle).
+ * live_cc: current knob values in Groove::AUTO_CCS order (may be null:
+ * CC events then play back unblended).
  */
 inline void ProcessTick(Track::Registry& reg, Mixer::Engine& mixer,
-                        uint32_t global_tick, DispatchFn dispatch)
+                        uint32_t global_tick, DispatchFn dispatch,
+                        uint8_t swing_ticks = 0,
+                        const uint8_t* live_cc = nullptr)
 {
     for(int i = 0; i < Track::MAX_TRACKS; i++)
     {
@@ -88,11 +104,14 @@ inline void ProcessTick(Track::Registry& reg, Mixer::Engine& mixer,
         const uint32_t len = s.LengthTicks();
         const uint32_t t   = global_tick % len;
 
-        // Reposition after a jump/wrap (rewind, first tick, loop seam)
+        // Reposition after a jump/wrap (rewind, first tick, loop seam) —
+        // comparisons run on SWUNG positions (monotonic warp keeps the
+        // sorted array dispatch-ordered)
         if(s.last_tick_mod == 0xFFFFFFFF || t != (s.last_tick_mod + 1) % len)
         {
             uint16_t idx = 0;
-            while(idx < s.event_count && s.events[idx].tick < t)
+            while(idx < s.event_count
+                  && Groove::SwingWarp(s.events[idx].tick, swing_ticks) < t)
             {
                 idx++;
             }
@@ -100,15 +119,30 @@ inline void ProcessTick(Track::Registry& reg, Mixer::Engine& mixer,
         }
         s.last_tick_mod = t;
 
-        // Dispatch everything scheduled at this position
+        // Dispatch everything scheduled at (or, after a live swing tweak,
+        // just behind) this position
         while(s.playback_idx < s.event_count
-              && s.events[s.playback_idx].tick == t)
+              && Groove::SwingWarp(s.events[s.playback_idx].tick, swing_ticks)
+                     <= t)
         {
             const Track::MidiEv& ev = s.events[s.playback_idx];
 
             uint8_t type   = ev.status & 0xF0;
             bool    is_on  = type == 0x90 && ev.d2 > 0;
             bool    is_off = type == 0x80 || (type == 0x90 && ev.d2 == 0);
+
+            if(type == 0xB0) // CC automation: blend live offset on top
+            {
+                uint8_t val = ev.d2;
+                int     a   = Groove::AutoCcIndex(ev.d1);
+                if(a >= 0 && live_cc != nullptr)
+                {
+                    val = Groove::BlendCc(ev.d2, live_cc[a], s.cc_base[a]);
+                }
+                dispatch(ev.status, ev.d1, val, strip.gain);
+                s.playback_idx++;
+                continue;
+            }
 
             if(s.kind == Track::Kind::MidiSynth)
             {

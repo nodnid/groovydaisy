@@ -40,6 +40,7 @@ import {
   buildSrcLenCommand,
   buildReqTrackDataCommand,
   buildMidiInjectCommand,
+  buildGrooveCommand,
   SRC_PADS,
   SRC_KEYS,
   SRC_GUITAR,
@@ -274,6 +275,10 @@ function App() {
       send(buildMidiInjectCommand(status, d1, d2)),
     [send]
   )
+  const handleGroove = useCallback(
+    (param: number, value: number) => send(buildGrooveCommand(param, value)),
+    [send]
+  )
 
   const handleLoadUserPreset = useCallback(
     (params: SynthParams) => {
@@ -417,6 +422,7 @@ function App() {
             onMute={handleTrackMute}
             onLevel={handleTrackLevel}
             onDelete={handleTrackDelete}
+            onGroove={handleGroove}
             connected={connected}
           />
         )}

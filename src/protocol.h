@@ -59,7 +59,7 @@
 namespace Protocol
 {
 
-constexpr uint8_t PROTO_VER = 2;
+constexpr uint8_t PROTO_VER = 3; // 3: MSG_GROOVE/CMD_GROOVE (Phase 4)
 
 // Sync byte
 constexpr uint8_t SYNC_BYTE = 0xAA;
@@ -101,6 +101,10 @@ constexpr uint8_t MSG_SRC_ACTIVITY = 0x14;
 // MSG_AUDIO_PEAKS: [slot][gen][count:2][u8 peaks...] — waveform buckets
 //   (24/bar, loop-position order) for audio lanes; sent on commit/snapshot
 constexpr uint8_t MSG_AUDIO_PEAKS = 0x15;
+// MSG_GROOVE: [quant_pads][quant_keys][swing_pct][vel_comp] — groove
+//   settings (Phase 4); sent on change and in the snapshot. quant is
+//   0=off 1=light 2=hard; swing_pct is 50..75; vel_comp 0/1.
+constexpr uint8_t MSG_GROOVE      = 0x16;
 // MSG_POOL: [bars_free:2][bars_total:2] — audio memory gauge; total==0
 //   means the pool is unlocked (no audio loops, tempo free)
 constexpr uint8_t MSG_POOL        = 0x20;
@@ -133,6 +137,16 @@ constexpr uint8_t CMD_UNDO         = 0xA1; // [] — delete newest capture
 constexpr uint8_t CMD_TRACK_DELETE = 0xA2; // [slot][gen] — hold-gesture in UIs
 constexpr uint8_t CMD_SRC_LEN      = 0xA3; // [source][bars 1/2/4/8]
 constexpr uint8_t CMD_REQ_TRACK_DATA = 0xA5; // [slot][gen]
+// CMD_GROOVE: [param][value] — param 0 = quantize pads, 1 = quantize
+// keys (0=off 1=light 2=hard), 2 = swing percent (50..75, playback-time,
+// live-tweakable), 3 = drum velocity compress (0/1). Echoed as MSG_GROOVE.
+constexpr uint8_t CMD_GROOVE       = 0xA6;
+
+// CMD_GROOVE param ids
+constexpr uint8_t GROOVE_QUANT_PADS = 0;
+constexpr uint8_t GROOVE_QUANT_KEYS = 1;
+constexpr uint8_t GROOVE_SWING      = 2;
+constexpr uint8_t GROOVE_VEL_COMP   = 3;
 
 // Capture sources
 constexpr uint8_t SRC_PADS   = 0;

@@ -7,11 +7,11 @@ design; this holds the sequence and the ambition. The product sentence:
 
 ## State as of this writing
 
-Phases 0–3 built; 0–2.5 hardware-verified. Phase 3 (guitar looper:
-granule pool, tempo lock, CopyJob, waveform lanes, Live double-press)
-is committed and flashed but **not yet verified with a guitar** — that
-is the very next action. Also committed-not-yet-verified: play resumes
-from the top of the stopped bar (count-in/ring/counter alignment fix).
+Phases 0–3 built and hardware-verified (2026-07-05), including guitar
+capture and USB MIDI tier 1. **Phase 4 (groove intelligence) is built,
+host-tested and committed — flash + feel-test is the next action**:
+does light quantize feel invisible, does 62% swing sit right, does a
+captured filter sweep + live knob ride feel like one gesture?
 
 Hard-won platform truths live in daisy_hardware.md and the memory files:
 libDaisy pinned to v5.4.0 (v7 breaks macOS CDC), BOOT_QSPI bootloader
@@ -28,19 +28,18 @@ KeyLab transport buttons never reach DIN (Live button CC 3 = capture).
    sacred (callback discipline).
 5. The screen is a window, never a requirement.
 
-## Phase 4 — Groove intelligence (next build)
+## Phase 4 — Groove intelligence (BUILT 2026-07-05, awaiting feel-test)
 
-MIDI capture becomes musical:
-- Quantize at capture: off / light (50% toward nearest 16th) / hard.
-  Note-offs travel with their note-ons. Per the plan's Phase 4 section.
-- **Swing** (deferred from v1!): applied at playback tick-mapping so
-  it's non-destructive and live-tweakable. A groovebox without swing
-  isn't one.
-- CC automation capture: knob motion rides the same rings; a captured
-  synth track replays its filter sweeps. Blend math from v1 with base
-  captured at commit (v1's stale-base bug documented in the plan).
-- Velocity feel: optional soft velocity-compress on drum captures
-  (campfire pad technique is wild; taming is kind).
+MIDI capture became musical (all in src/groove.h + seq_track playback,
+protocol v3, companion Groove panel; SPEC.md has the as-built sections):
+- ✅ Quantize at capture: off / light (50% toward nearest 16th) / hard,
+  per source. Note-offs travel with their note-ons, wrap-aware.
+- ✅ **Swing** (deferred from v1!): playback tick-mapping warp —
+  non-destructive, live-tweakable (app slider + Bank 4 encoder 5).
+- ✅ CC automation capture: 8 canonical synth CCs ride the keys ring
+  (thinned), replay through the main loop, blend base at commit.
+  Lanes render the motion as a dashed curve.
+- ✅ Velocity taming: optional x^0.6 compress on pad captures.
 
 ## Phase 5 — The sound opens up
 

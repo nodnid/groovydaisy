@@ -6,6 +6,7 @@ import {
 } from '../../core/state'
 import TrackLane from './TrackLane'
 import CaptureStrip from './CaptureStrip'
+import GroovePanel from './GroovePanel'
 
 interface ArrangeViewProps {
   device: DeviceState
@@ -20,6 +21,7 @@ interface ArrangeViewProps {
   onMute: (slot: number, mute: boolean) => void
   onLevel: (slot: number, level: number) => void
   onDelete: (slot: number, gen: number) => void
+  onGroove: (param: number, value: number) => void
   connected: boolean
 }
 
@@ -41,6 +43,7 @@ export default function ArrangeView({
   onMute,
   onLevel,
   onDelete,
+  onGroove,
   connected,
 }: ArrangeViewProps) {
   const [nowTick, setNowTick] = useState(0)
@@ -85,6 +88,8 @@ export default function ArrangeView({
         hasTracks={ordered.length > 0}
         connected={connected}
       />
+
+      <GroovePanel groove={device.groove} onGroove={onGroove} connected={connected} />
 
       {ordered.length === 0 ? (
         <div className="bg-groove-panel border border-groove-border rounded-lg p-8 text-center">

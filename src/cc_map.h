@@ -125,6 +125,8 @@ enum ParamTarget : uint8_t
     // v2 capture-length presets (bars 1/2/4/8 per source)
     TARGET_CAPTURE_LEN_PADS,
     TARGET_CAPTURE_LEN_KEYS,
+    // v2 groove (Phase 4): swing percent, live-tweakable from hardware
+    TARGET_SWING,
     TARGET_COUNT
 };
 
@@ -243,7 +245,7 @@ constexpr BankMappings BANK_SAMPLER_MAP = {
         {TARGET_NONE, "Decay"},      // Future: selected drum decay
         {TARGET_NONE, "Filter"},     // Future: selected drum filter
         {TARGET_NONE, "FltRes"},     // Future: selected drum filter res
-        {TARGET_NONE, "Swing"},      // Future: swing amount
+        {TARGET_SWING, "Swing"},     // 50..75% across the encoder sweep
         {TARGET_CAPTURE_LEN_PADS, "PadLen"},
         {TARGET_CAPTURE_LEN_KEYS, "KeyLen"},
         {TARGET_NONE, "---"},

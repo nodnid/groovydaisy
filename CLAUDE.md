@@ -91,5 +91,9 @@ Hard rules for firmware code:
 v2 rewrite: Phases 0–3 built and hardware-verified (2026-07-05),
 including guitar capture (granule pool, tempo lock, waveform lanes,
 Live double-press) and USB MIDI tier 1 (CMD_MIDI_INJECT + Web MIDI
-bridge; tools/sit_in_*.py are live-performance exercisers). Next:
-Phase 4 per ROADMAP.md (quantize, swing, CC-automation capture).
+bridge; tools/sit_in_*.py are live-performance exercisers). Phase 4
+(groove intelligence: quantize-at-capture, playback-warp swing, CC
+automation capture with commit-time blend base, pad velocity taming;
+protocol v3) built + host-tested 2026-07-05 — awaiting flash and
+feel-test. Next: Phase 5 per ROADMAP.md (reverb/delay sends, meters,
+Bank 4 finalization, drum sound design).

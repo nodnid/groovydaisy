@@ -193,3 +193,110 @@ TEST(seq_events_mid_capture_not_played_until_activate)
     CHECK_EQ(g_out[0].tick, 384u);
     CHECK_EQ(g_out[1].tick, 768u);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4: swing at playback + CC automation blend
+// ---------------------------------------------------------------------------
+
+static void RunTicksGroove(Registry& reg, Mixer::Engine& mixer, uint32_t from,
+                           uint32_t to_exclusive, uint8_t swing,
+                           const uint8_t* live_cc)
+{
+    for(uint32_t t = from; t < to_exclusive; t++)
+    {
+        g_now = t;
+        SeqTrack::ProcessTick(reg, mixer, t, Collect, swing, live_cc);
+    }
+}
+
+TEST(seq_swing_delays_offbeat_sixteenth_nondestructively)
+{
+    Registry reg;
+    reg.Init();
+    Mixer::Engine mixer;
+    mixer.Init();
+    g_out.clear();
+
+    // Hits on the downbeat and the offbeat 16th
+    int   slot = MakeTrack(reg, Kind::MidiDrum, 1,
+                           {{0, 0x99, 36, 100}, {24, 0x99, 38, 100}});
+    Slot& s    = reg.Get(slot);
+
+    RunTicksGroove(reg, mixer, 0, 384, 12, nullptr); // full shuffle
+
+    CHECK_EQ((int)g_out.size(), 2);
+    CHECK_EQ(g_out[0].tick, 0u);
+    CHECK_EQ(g_out[1].tick, 36u); // 24 swung to 36
+    // Non-destructive: the stored event never moved
+    CHECK_EQ(s.events[1].tick, 24u);
+
+    // Straight again next pass: same track, swing 0
+    g_out.clear();
+    RunTicksGroove(reg, mixer, 384, 768, 0, nullptr);
+    CHECK_EQ((int)g_out.size(), 2);
+    CHECK_EQ(g_out[1].tick, 384u + 24u);
+}
+
+TEST(seq_cc_playback_blends_live_offset_over_base)
+{
+    Registry reg;
+    reg.Init();
+    Mixer::Engine mixer;
+    mixer.Init();
+    g_out.clear();
+
+    // Recorded cutoff sweep point (CC 74 = AUTO_CCS[0]) at value 60
+    int   slot = MakeTrack(reg, Kind::MidiSynth, 1, {{10, 0xB0, 74, 60}});
+    Slot& s    = reg.Get(slot);
+    for(int i = 0; i < Track::MAX_AUTO_CC; i++)
+        s.cc_base[i] = 64;
+
+    // Knob untouched since commit: recorded value passes through
+    uint8_t live[Track::MAX_AUTO_CC] = {64, 64, 64, 64, 64, 64, 64, 64};
+    RunTicksGroove(reg, mixer, 0, 384, 0, live);
+    CHECK_EQ((int)g_out.size(), 1);
+    CHECK_EQ(g_out[0].status, 0xB0);
+    CHECK_EQ(g_out[0].d1, 74);
+    CHECK_EQ(g_out[0].d2, 60);
+
+    // Knob pushed +30 since commit: offset rides on top of the sweep
+    g_out.clear();
+    live[0] = 94;
+    RunTicksGroove(reg, mixer, 384, 768, 0, live);
+    CHECK_EQ((int)g_out.size(), 1);
+    CHECK_EQ(g_out[0].d2, 90);
+}
+
+TEST(seq_cc_events_never_touch_note_state_and_mute_silences_them)
+{
+    Registry reg;
+    reg.Init();
+    Mixer::Engine mixer;
+    mixer.Init();
+    g_out.clear();
+
+    int slot = MakeTrack(reg, Kind::MidiSynth, 1,
+                         {{0, 0x90, 60, 100},
+                          {10, 0xB0, 74, 80},
+                          {100, 0x80, 60, 0}});
+
+    uint8_t live[Track::MAX_AUTO_CC] = {64, 64, 64, 64, 64, 64, 64, 64};
+    RunTicksGroove(reg, mixer, 0, 50, 0, live); // note still sounding
+    CHECK_EQ((int)g_out.size(), 2);             // on + CC
+
+    // Muting suppresses CC dispatch too (a muted track shouldn't keep
+    // wiggling the filter) and releases the sounding note
+    g_out.clear();
+    mixer.Get(slot).mute = true;
+    RunTicksGroove(reg, mixer, 50, 769, 0, live);
+    bool saw_cc = false, saw_release = false;
+    for(const auto& d : g_out)
+    {
+        if(d.status == 0xB0)
+            saw_cc = true;
+        if(d.status == 0x80 && d.d1 == 60)
+            saw_release = true;
+    }
+    CHECK(!saw_cc);
+    CHECK(saw_release);
+}

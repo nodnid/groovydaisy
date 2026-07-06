@@ -31,6 +31,7 @@ constexpr int      MAX_TRACKS    = 32;
 constexpr int      MAX_PER_KIND  = 16;
 constexpr int      MAX_EVENTS    = 512;
 constexpr uint32_t TICKS_PER_BAR = 384; // mirrors clock.h
+constexpr int      MAX_AUTO_CC   = 8;   // automatable CCs (groove.h table)
 
 enum class Kind : uint8_t
 {
@@ -58,6 +59,10 @@ struct Slot
     // MIDI payload (filled before Activate; immutable while active)
     MidiEv   events[MAX_EVENTS];
     uint16_t event_count = 0;
+
+    // CC-blend base: live knob positions at capture commit (groove.h
+    // AUTO_CCS order). Playback applies recorded + (live - base).
+    uint8_t cc_base[MAX_AUTO_CC] = {64, 64, 64, 64, 64, 64, 64, 64};
 
     // Audio payload (Kind::Audio): granule chain in LOOP-POSITION order —
     // chain[b] holds the audio for loop bar b. Filled before Activate.

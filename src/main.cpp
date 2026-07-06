@@ -32,6 +32,7 @@
 #include "track.h"
 #include "capture.h"
 #include "audio_track.h"
+#include "groove.h"
 #include "seq_track.h"
 #include "ui_link.h"
 #include "samples/drums.h"
@@ -76,6 +77,22 @@ static bool     live_armed = false;
 static uint32_t live_ms    = 0;
 static uint32_t live_tick  = 0;
 
+// Phase 4: groove settings. Quantize/vel-comp apply at capture commit
+// (main loop). Swing is read by the audio callback every tick — atomic.
+static uint8_t quant_mode[2]   = {0, 0}; // Groove::Quant per SRC_PADS/KEYS
+static uint8_t swing_pct       = 50;     // UI value (50..75)
+static bool    drum_vel_comp   = false;
+std::atomic<uint8_t> swing_ticks{0};     // 0..12, playback warp amount
+static bool    groove_dirty    = false;  // throttled MSG_GROOVE (encoder)
+
+// Live knob positions per automatable CC (Groove::AUTO_CCS order).
+// Main-loop written, callback-read (byte loads are atomic on M7); the
+// CC-blend playback needs them, and capture commit snapshots them as
+// each track's blend base.
+static uint8_t live_cc_vals[Track::MAX_AUTO_CC]
+    = {64, 64, 64, 64, 64, 64, 64, 64};
+static Groove::CcThinner cc_thinner;
+
 // ---------------------------------------------------------------------------
 // SDRAM regions — the ENTIRE 64 MB budget is declared here (SPEC.md memory
 // budget), even for modules that arrive in later phases, so the layout risk
@@ -110,6 +127,11 @@ static_assert(sizeof(sample_bank) + sizeof(capture_ring_mem)
 // Live MIDI notes: main loop (UART parse) -> audio callback (dispatch)
 SpscRing<MidiRouter::Event, 128> midi_to_audio;
 
+// Sequenced CC automation: audio callback (SeqTrack dispatch) -> main
+// loop, where cc_map-style parameter application lives. Never the other
+// direction: engines stay note-only inside the callback.
+SpscRing<MidiRouter::Event, 64> cc_from_audio;
+
 // Voice activity: audio callback -> main loop (publish on change)
 std::atomic<uint8_t> synth_voices_active{0};
 std::atomic<uint8_t> drum_voices_active{0};
@@ -118,9 +140,10 @@ std::atomic<uint8_t> drum_voices_active{0};
 // Capture recording + sequenced playback glue (audio-callback context)
 // ---------------------------------------------------------------------------
 
-// Router record hook: every live note lands in its source's rolling ring.
-// Only while the clock runs — events stamped with a frozen tick would
-// pollute later capture windows.
+// Router record hook: every live note — and every canonical automation
+// CC the main loop injects (Phase 4) — lands in its source's rolling
+// ring. Only while the clock runs — events stamped with a frozen tick
+// would pollute later capture windows.
 void RecordToRings(const MidiRouter::Event& e, uint32_t tick)
 {
     // Not while stopped (frozen ticks would pollute later windows) and not
@@ -135,9 +158,17 @@ void RecordToRings(const MidiRouter::Event& e, uint32_t tick)
         keys_ring.Push(tick, e.status, e.d1, e.d2);
 }
 
-// SeqTrack dispatch -> the same router path as live input
+// SeqTrack dispatch -> the same router path as live input. CC automation
+// events detour to the main loop instead: parameter application (synth
+// SetParam and friends) is main-loop territory, and CCs don't need
+// sample accuracy.
 void SeqDispatch(uint8_t status, uint8_t d1, uint8_t d2, float vel_scale)
 {
+    if((status & 0xF0) == 0xB0)
+    {
+        cc_from_audio.Push({status, d1, d2});
+        return;
+    }
     MidiRouter::Event e{status, d1, d2};
     router.Dispatch(e, MidiRouter::Source::Playback, clk.NowTick(), vel_scale);
 }
@@ -215,7 +246,10 @@ void AudioCallback(AudioHandle::InputBuffer  in,
                         s.play_gran_off = 0;
                     }
                 }
-                SeqTrack::ProcessTick(registry, mixer, t, SeqDispatch);
+                SeqTrack::ProcessTick(
+                    registry, mixer, t, SeqDispatch,
+                    swing_ticks.load(std::memory_order_relaxed),
+                    live_cc_vals);
             }
             tick_i++;
         }
@@ -479,6 +513,7 @@ void SendTrack(int slot);
 void SendTrackData(int slot);
 void SendPool();
 void SendAudioPeaks(int slot);
+void SendGroove();
 
 /** Full snapshot: everything the companion needs to cold-join. */
 void SendSnapshot()
@@ -499,6 +534,7 @@ void SendSnapshot()
     SendEngineMix();
     SendSynthState();
     SendPool();
+    SendGroove();
     for(int i = 0; i < Track::MAX_TRACKS; i++)
     {
         if(registry.Get(i).active.load())
@@ -677,6 +713,14 @@ void SendAudioPeaks(int slot)
     ui.Send(Protocol::MSG_AUDIO_PEAKS, p, (uint16_t)(4 + s.peak_count));
 }
 
+void SendGroove()
+{
+    uint8_t p[4] = {quant_mode[Protocol::SRC_PADS],
+                    quant_mode[Protocol::SRC_KEYS], swing_pct,
+                    (uint8_t)(drum_vel_comp ? 1 : 0)};
+    ui.Send(Protocol::MSG_GROOVE, p, 4);
+}
+
 static uint8_t SnapBars(uint8_t bars)
 {
     // Loop lengths are 1/2/4/8 (SPEC.md track model)
@@ -722,6 +766,22 @@ void CommitCapture(uint8_t source, uint8_t bars, uint32_t end_tick,
         SendCaptureMsg(Protocol::CAP_REFUSED, source, bars, 0, 0,
                        Protocol::ERR_BUSY);
         return;
+    }
+
+    // Phase 4 groove pass (payload is still private — before Activate):
+    // quantize per source (note-offs travel with their note-ons), tame
+    // pad dynamics if asked, and snapshot the CC-blend base at COMMIT
+    // (v1 captured base at play start; a knob moved between commit and
+    // play then skewed every replayed sweep — the stale-base bug).
+    Groove::QuantizeEvents(s.events, s.event_count, s.LengthTicks(),
+                           static_cast<Groove::Quant>(quant_mode[source]));
+    if(source == Protocol::SRC_PADS && drum_vel_comp)
+    {
+        Groove::CompressVelocities(s.events, s.event_count);
+    }
+    for(int i = 0; i < Track::MAX_AUTO_CC; i++)
+    {
+        s.cc_base[i] = live_cc_vals[i];
     }
 
     mixer.Get(slot).Reset(0.8f);
@@ -960,6 +1020,7 @@ void DoRewind()
     pads_ring.Reset();
     keys_ring.Reset();
     audio_ring.Reset(); // anchors reference the old timeline too
+    cc_thinner.Reset(); // thinner state is stamped with old-timeline ticks
     pending_cap[Protocol::SRC_PADS].armed   = false;
     pending_cap[Protocol::SRC_KEYS].armed   = false;
     pending_cap[Protocol::SRC_GUITAR].armed = false;
@@ -1117,6 +1178,13 @@ void ApplyParamTarget(CCMap::ParamTarget target, uint8_t cc_value)
         case TARGET_CAPTURE_LEN_KEYS:
             src_len_preset[Protocol::SRC_KEYS] = 1 << (cc_value / 32);
             break;
+        case TARGET_SWING:
+            // Encoder sweep = 50..75%; publish throttled (knob sweeps)
+            swing_pct = (uint8_t)(50 + ((uint32_t)cc_value * 25) / 127);
+            swing_ticks.store(Groove::SwingPctToTicks(swing_pct),
+                              std::memory_order_relaxed);
+            groove_dirty = true;
+            break;
         case TARGET_MASTER_OUTPUT:
             mixer.SetMaster(CCToNorm(cc_value));
             break;
@@ -1140,6 +1208,73 @@ void ApplyParamTarget(CCMap::ParamTarget target, uint8_t cc_value)
        || target == CCMap::TARGET_SYNTH_MASTER_LEVEL)
     {
         engine_mix_dirty = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CC automation capture + playback glue (Phase 4)
+// ---------------------------------------------------------------------------
+
+// ParamTarget per automatable CC, in Groove::AUTO_CCS order
+// ({74, 71, 79, 93, 18, 19, 16, 85} — the KeyLab Synth bank).
+static const CCMap::ParamTarget AUTO_TARGETS[Track::MAX_AUTO_CC] = {
+    CCMap::TARGET_SYNTH_FILTER_CUTOFF,  CCMap::TARGET_SYNTH_FILTER_RES,
+    CCMap::TARGET_SYNTH_FILTER_ENV_AMT, CCMap::TARGET_SYNTH_AMP_ATTACK,
+    CCMap::TARGET_SYNTH_AMP_DECAY,      CCMap::TARGET_SYNTH_AMP_SUSTAIN,
+    CCMap::TARGET_SYNTH_AMP_RELEASE,    CCMap::TARGET_SYNTH_LEVEL,
+};
+
+static int AutoIdxForTarget(CCMap::ParamTarget target)
+{
+    for(int i = 0; i < Track::MAX_AUTO_CC; i++)
+    {
+        if(AUTO_TARGETS[i] == target)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Called for every live CC that reached a parameter (UART or inject,
+ * post bank/pickup). Tracks the knob position for the blend math and,
+ * while the grid runs, records the move (thinned) into the keys ring via
+ * the callback — the same tick-stamped path notes take, so a capture
+ * lifts the performance and its knob motion together.
+ */
+void MaybeRecordAutoCc(CCMap::ParamTarget target, uint8_t value)
+{
+    int idx = AutoIdxForTarget(target);
+    if(idx < 0)
+    {
+        return;
+    }
+    live_cc_vals[idx] = value; // knob position: always tracked, even stopped
+
+    if(!clk.Playing() || clk.InPreroll())
+    {
+        return;
+    }
+    if(cc_thinner.ShouldRecord(idx, clk.NowTick(), value))
+    {
+        midi_to_audio.Push({(uint8_t)(0xB0 | MidiRouter::SYNTH_CHANNEL),
+                            Groove::AUTO_CCS[idx], value});
+    }
+}
+
+/** Main-loop drain: sequenced CC automation from the callback lands on
+ *  the engines through the same application path as live knobs. */
+void DrainCcPlayback()
+{
+    MidiRouter::Event e;
+    while(cc_from_audio.Pop(e))
+    {
+        int idx = Groove::AutoCcIndex(e.d1);
+        if(idx >= 0)
+        {
+            ApplyParamTarget(AUTO_TARGETS[idx], e.d2);
+        }
     }
 }
 
@@ -1301,6 +1436,7 @@ void ProcessCommand()
                     if(target != CCMap::TARGET_NONE)
                     {
                         ApplyParamTarget(target, out_value);
+                        MaybeRecordAutoCc(target, out_value);
                     }
                     if(cc_engine.BankChanged())
                     {
@@ -1349,6 +1485,35 @@ void ProcessCommand()
             {
                 src_len_preset[parser.payload[0]]
                     = SnapBars(parser.payload[1]);
+            }
+            break;
+
+        case Protocol::CMD_GROOVE:
+            if(parser.payload_len >= 2)
+            {
+                uint8_t value = parser.payload[1];
+                switch(parser.payload[0])
+                {
+                    case Protocol::GROOVE_QUANT_PADS:
+                        quant_mode[Protocol::SRC_PADS]
+                            = value > 2 ? 2 : value;
+                        break;
+                    case Protocol::GROOVE_QUANT_KEYS:
+                        quant_mode[Protocol::SRC_KEYS]
+                            = value > 2 ? 2 : value;
+                        break;
+                    case Protocol::GROOVE_SWING:
+                        swing_ticks.store(Groove::SwingPctToTicks(value),
+                                          std::memory_order_relaxed);
+                        swing_pct = Groove::SwingTicksToPct(
+                            swing_ticks.load(std::memory_order_relaxed));
+                        break;
+                    case Protocol::GROOVE_VEL_COMP:
+                        drum_vel_comp = value != 0;
+                        break;
+                    default: break;
+                }
+                SendGroove();
             }
             break;
 
@@ -1433,6 +1598,7 @@ int main(void)
     registry.Init();
     pads_ring.Reset();
     keys_ring.Reset();
+    cc_thinner.Reset();
     audio_ring.Init(capture_ring_mem, CAPTURE_RING_SAMPLES);
     pool.Init(granule_pool_mem, GRANULE_POOL_SAMPLES);
     cc_engine.Init();
@@ -1534,6 +1700,9 @@ int main(void)
         // Ring -> granules copy in progress (guitar capture commit)
         StepCopyJob();
 
+        // Sequenced CC automation from the callback -> engines
+        DrainCcPlayback();
+
         // Transport/tempo dirty -> publish
         if(clk.CheckDirty())
         {
@@ -1579,6 +1748,13 @@ int main(void)
             engine_mix_dirty     = false;
             last_engine_mix_send = now;
             SendEngineMix();
+        }
+        static uint32_t last_groove_send = 0;
+        if(groove_dirty && now - last_groove_send >= 100)
+        {
+            groove_dirty     = false;
+            last_groove_send = now;
+            SendGroove();
         }
 
         // ------------------------------------------------------------------
@@ -1654,6 +1830,7 @@ int main(void)
                     if(target != CCMap::TARGET_NONE)
                     {
                         ApplyParamTarget(target, out_value);
+                        MaybeRecordAutoCc(target, out_value);
                     }
                     if(cc_engine.BankChanged())
                     {

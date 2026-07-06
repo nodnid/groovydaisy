@@ -156,12 +156,31 @@ Classic prospective punch-in falls out for free if ever wanted (press Capture
 at the *end* of the passage instead of Record at the start); v2 ships
 retrospective-only to keep a single mental model.
 
-### Quantize
+### Quantize (as built, Phase 4)
 
-Optional input quantize for MIDI tracks: **off / light (nudge toward nearest
-16th) / hard 16th**. Applied at capture time; stored events keep original
-timestamps so quantize can be non-destructive if cheap, otherwise applied
-destructively and documented as such.
+Optional input quantize for MIDI tracks: **off / light (50% toward nearest
+16th) / hard 16th**, set per source (pads/keys). Applied **destructively at
+capture commit** (groove.h) — the rolling ring keeps the raw performance
+until the moment you grab, which is all the non-destructiveness the model
+needs: a mis-quantized take costs one undo and a re-grab. Note-offs travel
+by their note-on's delta so durations survive; the pairing is wrap-aware
+across the loop seam; CC events are never quantized.
+
+### Swing (as built, Phase 4)
+
+Swing is a **playback-time tick warp**, never a mutation of stored events:
+each 8th note is warped piecewise-linear (first 16th stretches, second
+compresses; bar lines are fixed points), 50% straight to 75% full shuffle.
+Because it's applied in the tick-mapping (seq_track.h), it is global,
+non-destructive, and **live-tweakable while loops run** — from the app
+slider or the Bank 4 "Swing" encoder. One groove for the whole box; audio
+loops don't swing (no time-stretch on this CPU).
+
+### Velocity taming (as built, Phase 4)
+
+Optional power-curve compression (x^0.6) on drum-capture velocities —
+lifts timid campfire pad hits without clipping the confident ones.
+Applied at capture commit, toggleable, off by default.
 
 ### Tempo lock
 
@@ -300,16 +319,26 @@ filter), cheaper reverb, 4 synth voices.
 
 ---
 
-## CC automation (kept, generalized)
+## CC automation (as built, Phase 4)
 
-The blend/offset system is a keeper:
+The v1 blend/offset system, generalized to the v2 capture model:
 
-- CC moves ride in the same rolling MIDI ring as notes; a capture commits
-  both together into the new track, thinned (min-interval + min-delta).
-- Playback: `effective = recorded + (live_knob − base_at_play)`, clamped —
-  live tweaks ride *on top of* recorded motion.
+- 8 automatable targets (cutoff, resonance, filter env amount, amp ADSR,
+  synth level), addressed by their **canonical Synth-bank CC numbers**
+  (groove.h AUTO_CCS) so replay never depends on the active bank.
+- CC moves ride in the same rolling MIDI ring as notes (thinned at record:
+  ≥6 ticks and ≥2 values apart); a capture commits both together into the
+  new track. A knob-only take makes a pure automation track — a captured
+  filter sweep that modulates whatever you play live.
+- Playback: `effective = recorded + (live_knob − base_at_COMMIT)`,
+  clamped — live tweaks ride *on top of* recorded motion. Base is
+  snapshotted per track at commit, which fixes v1's stale-base bug
+  (base-at-play skewed every sweep by whatever the knob did in between).
+- Plumbing honors the callback rules: recorded CCs dispatch from
+  seq_track in the callback but detour through an SPSC ring back to the
+  main loop, where parameter application lives (cc_map.h).
 - A synth track bundles its notes and its CC motion; deleting the track
-  removes both together.
+  removes both together. Lanes draw the motion as a faint dashed curve.
 
 ---
 

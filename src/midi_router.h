@@ -13,9 +13,11 @@
  * midi_to_audio ring inside the audio callback) and sequenced playback
  * (Phase 2) both land here, so engines can't drift apart on behavior.
  *
- * Callback-safe: no allocation, no USB. CC events do NOT come through
- * here — they carry bank/pickup logic and stay in the main loop
- * (cc_map.h), applying engine parameters directly.
+ * Callback-safe: no allocation, no USB. CC events are never DISPATCHED
+ * here — bank/pickup logic and parameter application stay in the main
+ * loop (cc_map.h). The only CCs that enter are the canonical automation
+ * CCs (groove.h) the main loop injects for RECORDING: the record hook
+ * sees them (tick-stamped into the capture rings), the engines don't.
  *
  * Channel map: ch 1 (0-indexed 0) -> synth keys; ch 10 (0-indexed 9)
  * notes 36-43 -> drum pads.
@@ -70,14 +72,18 @@ class Router
         bool is_on  = (type == 0x90 && e.d2 > 0);
         bool is_off = (type == 0x80 || (type == 0x90 && e.d2 == 0));
 
-        if(!is_on && !is_off)
-        {
-            return;
-        }
-
+        // Record BEFORE the note filter: canonical automation CCs (0xB0,
+        // Phase 4) ride the same rings as notes so a capture lifts a
+        // performance and its knob motion together. Engines below stay
+        // note-only — CC application lives in the main loop (cc_map.h).
         if(src == Source::Live && record_ != nullptr)
         {
             record_(e, tick);
+        }
+
+        if(!is_on && !is_off)
+        {
+            return;
         }
 
         if(channel == DRUM_CHANNEL)

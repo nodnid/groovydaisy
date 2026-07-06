@@ -129,7 +129,30 @@ function LaneContent({
     rects.push({ note, from, to: from + lengthTicks - 1 })
   }
 
-  if (rects.length === 0) return null
+  // Captured knob motion (CC automation, Phase 4): one faint polyline per
+  // CC under the notes — the recorded sweep made visible
+  const ccByNum = new Map<number, Array<{ tick: number; value: number }>>()
+  for (const e of data.events) {
+    if ((e.status & 0xf0) === 0xb0) {
+      if (!ccByNum.has(e.d1)) ccByNum.set(e.d1, [])
+      ccByNum.get(e.d1)!.push({ tick: e.tick, value: e.d2 })
+    }
+  }
+  const ccCurves = [...ccByNum.values()].map((pts, i) => (
+    <polyline
+      key={`cc${i}`}
+      points={pts
+        .map((p) => `${(p.tick / lengthTicks) * W},${H - (p.value / 127) * H}`)
+        .join(' ')}
+      fill="none"
+      stroke={color}
+      strokeWidth="0.6"
+      strokeDasharray="1.5 1"
+      opacity={muted ? 0.15 : 0.45}
+    />
+  ))
+
+  if (rects.length === 0) return <>{ccCurves}</>
   let lo = 127
   let hi = 0
   for (const r of rects) {
@@ -146,6 +169,7 @@ function LaneContent({
 
   return (
     <>
+      {ccCurves}
       {rects.map((r, i) => {
         const y = H - ((r.note - lo + 0.5) / span) * H - 1
         const segs =

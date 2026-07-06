@@ -27,6 +27,7 @@ import {
   MSG_TRACK_DATA,
   MSG_SRC_ACTIVITY,
   MSG_AUDIO_PEAKS,
+  MSG_GROOVE,
   MSG_POOL,
   type ParsedMessage,
   type SynthParams,
@@ -113,6 +114,14 @@ export interface PoolState {
   barsTotal: number
 }
 
+/** Groove settings (Phase 4): quantize at capture, swing at playback. */
+export interface GrooveState {
+  quantPads: number // 0 off / 1 light / 2 hard
+  quantKeys: number
+  swingPct: number // 50..75
+  velComp: boolean
+}
+
 export interface DeviceState {
   protoVer: number | null // null until MSG_HELLO seen
   transport: TransportState
@@ -130,6 +139,7 @@ export interface DeviceState {
   trackData: Record<number, TrackData> // keyed by slot
   audioPeaks: Record<number, AudioPeaks> // keyed by slot (audio tracks)
   pool: PoolState
+  groove: GrooveState
   captureFlash: CaptureFlash | null
   srcActivity: SrcActivity
 }
@@ -161,6 +171,7 @@ export function getInitialDeviceState(): DeviceState {
     trackData: {},
     audioPeaks: {},
     pool: { barsFree: 0, barsTotal: 0 },
+    groove: { quantPads: 0, quantKeys: 0, swingPct: 50, velComp: false },
     captureFlash: null,
     srcActivity: {
       padsBarsBanked: 0,
@@ -298,6 +309,17 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
       return {
         ...state,
         pool: { barsFree: msg.barsFree, barsTotal: msg.barsTotal },
+      }
+
+    case MSG_GROOVE:
+      return {
+        ...state,
+        groove: {
+          quantPads: msg.quantPads,
+          quantKeys: msg.quantKeys,
+          swingPct: msg.swingPct,
+          velComp: msg.velComp,
+        },
       }
 
     case MSG_TRACK_DATA: {

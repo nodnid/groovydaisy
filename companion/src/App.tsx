@@ -45,6 +45,7 @@ import {
   buildGrooveCommand,
   buildFxCommand,
   buildTrackEditCommand,
+  buildSceneCommand,
   type TrackEditArgs,
   SRC_PADS,
   SRC_KEYS,
@@ -301,6 +302,10 @@ function App() {
       send(buildTrackEditCommand(slot, gen, args)),
     [send]
   )
+  const handleScene = useCallback(
+    (op: number, idx: number) => send(buildSceneCommand(op, idx)),
+    [send]
+  )
 
   const handleLoadUserPreset = useCallback(
     (params: SynthParams) => {
@@ -446,6 +451,7 @@ function App() {
             onDelete={handleTrackDelete}
             onEdit={handleTrackEdit}
             onGroove={handleGroove}
+            onScene={handleScene}
             connected={connected}
           />
         )}

@@ -33,6 +33,7 @@ export const MSG_TRACK_DATA = 0x13
 export const MSG_SRC_ACTIVITY = 0x14
 export const MSG_AUDIO_PEAKS = 0x15
 export const MSG_GROOVE = 0x16
+export const MSG_SCENE = 0x17
 export const MSG_POOL = 0x20
 export const MSG_FX = 0x21
 export const MSG_METERS = 0x22
@@ -61,6 +62,13 @@ export const CMD_REQ_TRACK_DATA = 0xa5
 export const CMD_GROOVE = 0xa6
 export const CMD_FX = 0xa7
 export const CMD_TRACK_EDIT = 0xa8
+export const CMD_SCENE = 0xa9
+
+// CMD_SCENE ops
+export const SCENE_SAVE = 0
+export const SCENE_GO = 1
+export const NUM_SCENES = 8
+export const SCENE_NONE = 0xff
 
 // CMD_TRACK_EDIT ops (mirrors protocol.h)
 export const EDIT_TOGGLE_DRUM = 0
@@ -343,6 +351,14 @@ export interface MetersMessage {
   strips: number[] // 36 values, indexed by strip id
 }
 
+/** Scene state (horizon #2): mute snapshots switched on the bar line */
+export interface SceneMessage {
+  type: typeof MSG_SCENE
+  active: number // scene index or SCENE_NONE
+  armed: number // scene index or SCENE_NONE (waiting for the bar line)
+  definedMask: number // bit i = scene i saved
+}
+
 /** Ring-drop diagnostics (Phase 6); cumulative, all-zero = healthy */
 export interface StatsMessage {
   type: typeof MSG_STATS
@@ -419,6 +435,7 @@ export type ParsedMessage =
   | FxMessage
   | MetersMessage
   | StatsMessage
+  | SceneMessage
   | PoolMessage
 
 // Parser state
@@ -551,6 +568,11 @@ export function buildGrooveCommand(param: number, value: number): Uint8Array {
 /** Set one send-FX parameter (FX_* param ids); firmware echoes MSG_FX. */
 export function buildFxCommand(param: number, value: number): Uint8Array {
   return buildMessage(CMD_FX, new Uint8Array([param, value]))
+}
+
+/** Scenes: op = SCENE_SAVE | SCENE_GO. */
+export function buildSceneCommand(op: number, idx: number): Uint8Array {
+  return buildMessage(CMD_SCENE, new Uint8Array([op, idx]))
 }
 
 /** Lane editing (horizon #1). Success republishes MSG_TRACK(+DATA) with a
@@ -929,6 +951,17 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
       }
       break
 
+    case MSG_SCENE:
+      if (payload.length >= 3) {
+        return {
+          type: MSG_SCENE,
+          active: payload[0],
+          armed: payload[1],
+          definedMask: payload[2],
+        }
+      }
+      break
+
     case MSG_STATS:
       if (payload.length >= 16) {
         const u32 = (o: number) =>
@@ -1117,6 +1150,8 @@ export function getMessageTypeName(type: number): string {
       return 'AUDIO_PEAKS'
     case MSG_GROOVE:
       return 'GROOVE'
+    case MSG_SCENE:
+      return 'SCENE'
     case MSG_FX:
       return 'FX'
     case MSG_METERS:

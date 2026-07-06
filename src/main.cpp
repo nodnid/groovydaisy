@@ -88,6 +88,16 @@ std::atomic<uint8_t> swing_ticks{0};     // 0..12, playback warp amount
 static bool    groove_dirty    = false;  // throttled MSG_GROOVE (encoder)
 static bool    fx_dirty        = false;  // throttled MSG_FX (encoder sweeps)
 
+// Scenes (horizon #2): each scene is a mute mask over all 36 strips.
+// Switching applies on the NEXT BAR LINE (musical time is circular) —
+// armed in the main loop, applied by the same poll that fires pending
+// captures. Not persisted (session persistence is a later horizon item).
+static uint64_t scene_mask[Protocol::NUM_SCENES];
+static uint8_t  scene_defined = 0;    // bitmask
+static uint8_t  active_scene  = Protocol::SCENE_NONE;
+static uint8_t  armed_scene   = Protocol::SCENE_NONE;
+static uint32_t scene_at_tick = 0;    // bar line the switch fires on
+
 // Live knob positions per automatable CC (Groove::AUTO_CCS order).
 // Main-loop written, callback-read (byte loads are atomic on M7); the
 // CC-blend playback needs them, and capture commit snapshots them as
@@ -526,6 +536,7 @@ void SendPool();
 void SendAudioPeaks(int slot);
 void SendGroove();
 void SendFx();
+void SendScene();
 
 /** Full snapshot: everything the companion needs to cold-join. */
 void SendSnapshot()
@@ -548,6 +559,7 @@ void SendSnapshot()
     SendPool();
     SendGroove();
     SendFx();
+    SendScene();
     for(int i = 0; i < Track::MAX_TRACKS; i++)
     {
         if(registry.Get(i).active.load())
@@ -1056,6 +1068,86 @@ void PollPendingCaptures()
                               pending_silent[src]);
             }
         }
+    }
+}
+
+void SendScene()
+{
+    uint8_t p[3] = {active_scene, armed_scene, scene_defined};
+    ui.Send(Protocol::MSG_SCENE, p, 3);
+}
+
+/** Apply a scene's mute mask; publishes only the strips that changed. */
+void ApplyScene(uint8_t idx)
+{
+    for(int i = 0; i < Mixer::NUM_STRIPS; i++)
+    {
+        bool want = (scene_mask[idx] >> i) & 1;
+        if(mixer.Get(i).mute != want)
+        {
+            mixer.Get(i).mute = want;
+            SendMixerStrip((uint8_t)i);
+        }
+    }
+    active_scene = idx;
+    armed_scene  = Protocol::SCENE_NONE;
+    SendScene();
+}
+
+void HandleSceneCmd(uint8_t op, uint8_t idx)
+{
+    if(idx >= Protocol::NUM_SCENES)
+    {
+        return;
+    }
+    if(op == Protocol::SCENE_SAVE)
+    {
+        uint64_t m = 0;
+        for(int i = 0; i < Mixer::NUM_STRIPS; i++)
+        {
+            if(mixer.Get(i).mute)
+            {
+                m |= (uint64_t)1 << i;
+            }
+        }
+        scene_mask[idx] = m;
+        scene_defined |= (uint8_t)(1 << idx);
+        active_scene = idx; // saving makes it the current scene
+        SendScene();
+    }
+    else if(op == Protocol::SCENE_GO)
+    {
+        if(!(scene_defined & (1 << idx)))
+        {
+            return; // unsaved scene: silence, not an error
+        }
+        if(!clk.Playing() || clk.InPreroll())
+        {
+            ApplyScene(idx); // stopped: no bar line to wait for
+            return;
+        }
+        armed_scene   = idx;
+        scene_at_tick = ((clk.NowTick() / Clock::TICKS_PER_BAR) + 1)
+                        * Clock::TICKS_PER_BAR;
+        SendScene(); // armed state visible until the bar line
+    }
+}
+
+/** Main-loop poll: fire the armed scene when the clock crosses the bar. */
+void PollArmedScene()
+{
+    if(armed_scene == Protocol::SCENE_NONE)
+    {
+        return;
+    }
+    if(!clk.Playing())
+    {
+        ApplyScene(armed_scene); // stopped while armed: just do it
+        return;
+    }
+    if(clk.NowTick() >= scene_at_tick)
+    {
+        ApplyScene(armed_scene);
     }
 }
 
@@ -1720,6 +1812,13 @@ void ProcessCommand()
             }
             break;
 
+        case Protocol::CMD_SCENE:
+            if(parser.payload_len >= 2)
+            {
+                HandleSceneCmd(parser.payload[0], parser.payload[1]);
+            }
+            break;
+
         case Protocol::CMD_REQ_TRACK_DATA:
             if(parser.payload_len >= 2)
             {
@@ -1906,6 +2005,9 @@ int main(void)
         // Pending retrospective captures fire when the clock crosses
         // their bar boundary
         PollPendingCaptures();
+
+        // Armed scene switches fire on the bar line too
+        PollArmedScene();
 
         // Ring -> granules copy in progress (guitar capture commit)
         StepCopyJob();

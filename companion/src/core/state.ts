@@ -28,6 +28,7 @@ import {
   MSG_SRC_ACTIVITY,
   MSG_AUDIO_PEAKS,
   MSG_GROOVE,
+  MSG_SCENE,
   MSG_FX,
   MSG_METERS,
   MSG_STATS,
@@ -117,6 +118,13 @@ export interface PoolState {
   barsTotal: number
 }
 
+/** Scene state (horizon #2). */
+export interface SceneState {
+  active: number // 0xff = none
+  armed: number // 0xff = none
+  definedMask: number
+}
+
 /** Send-FX params (Phase 5). */
 export interface FxState {
   revSize: number
@@ -170,6 +178,7 @@ export interface DeviceState {
   fx: FxState
   meters: MeterState
   stats: StatsState
+  scenes: SceneState
   captureFlash: CaptureFlash | null
   srcActivity: SrcActivity
 }
@@ -205,6 +214,7 @@ export function getInitialDeviceState(): DeviceState {
     fx: { revSize: 88, revTone: 96, dlyDiv: 1, dlyFb: 55 },
     meters: { masterL: 0, masterR: 0, cpuPct: 0, strips: Array(36).fill(0) },
     stats: { midiDrops: 0, ccDrops: 0, txLappedInt: 0, txLappedExt: 0 },
+    scenes: { active: 0xff, armed: 0xff, definedMask: 0 },
     captureFlash: null,
     srcActivity: {
       padsBarsBanked: 0,
@@ -352,6 +362,16 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
           quantKeys: msg.quantKeys,
           swingPct: msg.swingPct,
           velComp: msg.velComp,
+        },
+      }
+
+    case MSG_SCENE:
+      return {
+        ...state,
+        scenes: {
+          active: msg.active,
+          armed: msg.armed,
+          definedMask: msg.definedMask,
         },
       }
 

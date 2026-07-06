@@ -8,6 +8,7 @@ import TrackLane from './TrackLane'
 import type { TrackEditArgs } from '../../core/protocol'
 import CaptureStrip from './CaptureStrip'
 import GroovePanel from './GroovePanel'
+import ScenePanel from './ScenePanel'
 
 interface ArrangeViewProps {
   device: DeviceState
@@ -24,6 +25,7 @@ interface ArrangeViewProps {
   onDelete: (slot: number, gen: number) => void
   onEdit: (slot: number, gen: number, args: TrackEditArgs) => void
   onGroove: (param: number, value: number) => void
+  onScene: (op: number, idx: number) => void
   connected: boolean
 }
 
@@ -47,6 +49,7 @@ export default function ArrangeView({
   onDelete,
   onEdit,
   onGroove,
+  onScene,
   connected,
 }: ArrangeViewProps) {
   const [nowTick, setNowTick] = useState(0)
@@ -93,6 +96,13 @@ export default function ArrangeView({
       />
 
       <GroovePanel groove={device.groove} onGroove={onGroove} connected={connected} />
+
+      <ScenePanel
+        scenes={device.scenes}
+        playing={device.transport.playing}
+        onScene={onScene}
+        connected={connected}
+      />
 
       {ordered.length === 0 ? (
         <div className="bg-groove-panel border border-groove-border rounded-lg p-8 text-center">

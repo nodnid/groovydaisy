@@ -105,6 +105,10 @@ constexpr uint8_t MSG_AUDIO_PEAKS = 0x15;
 //   settings (Phase 4); sent on change and in the snapshot. quant is
 //   0=off 1=light 2=hard; swing_pct is 50..75; vel_comp 0/1.
 constexpr uint8_t MSG_GROOVE      = 0x16;
+// MSG_SCENE: [active][armed][defined_mask] — scene state (horizon #2).
+//   active/armed are scene indices (0xFF = none); defined_mask bit i =
+//   scene i has been saved. Sent on change and in the snapshot.
+constexpr uint8_t MSG_SCENE       = 0x17;
 // MSG_POOL: [bars_free:2][bars_total:2] — audio memory gauge; total==0
 //   means the pool is unlocked (no audio loops, tempo free)
 constexpr uint8_t MSG_POOL        = 0x20;
@@ -174,6 +178,16 @@ constexpr uint8_t CMD_TRACK_EDIT = 0xA8;
 constexpr uint8_t EDIT_TOGGLE_DRUM = 0;
 constexpr uint8_t EDIT_DELETE_NOTE = 1;
 constexpr uint8_t EDIT_MOVE_NOTE   = 2;
+
+// CMD_SCENE: [op][idx] — op 0 = save (snapshot current mutes into scene
+// idx), op 1 = go (switch on the NEXT BAR LINE while playing; instantly
+// when stopped). Going to an unsaved scene is refused silently.
+constexpr uint8_t CMD_SCENE = 0xA9;
+
+constexpr uint8_t SCENE_SAVE  = 0;
+constexpr uint8_t SCENE_GO    = 1;
+constexpr uint8_t NUM_SCENES  = 8;
+constexpr uint8_t SCENE_NONE  = 0xFF;
 
 // CMD_FX param ids
 constexpr uint8_t FX_REV_SIZE = 0; // reverb feedback, CC scale

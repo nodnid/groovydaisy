@@ -91,9 +91,10 @@ Ordered by feel-per-effort, informed by Cleo's reactions so far:
    observes the store), then republish — strips/seq identity survive,
    the companion re-renders from the new truth. tools/verify_edit.py
    awaits the next flash.
-2. **Scenes** (song sections): snapshot mute-states + switch on the
-   next bar line. Cheap to build, huge arrangement power. Verse/chorus
-   at a campfire.
+2. ✅ **Scenes** (BUILT 2026-07-06): 8 mute-state snapshots, switch on
+   the next bar line (instant when stopped), armed state visible until
+   the bar takes it. CMD_SCENE/MSG_SCENE + Arrange-tab scene row.
+   Session-lived until SD persistence lands.
 3. **Merge/bounce**: same-length tracks → one (frees strips and, for
    audio, granules). v1-history's freeze concept generalized: bounce
    MIDI tracks THROUGH the synth into audio granules to free polyphony

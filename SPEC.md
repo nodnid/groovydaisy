@@ -362,6 +362,18 @@ The v1 blend/offset system, generalized to the v2 capture model:
 
 ---
 
+## Scenes (as built, horizon #2)
+
+Per-track mute is the arrangement move; a **scene** is a saved mute-state
+over all 36 strips. Eight slots. Going to a scene applies **on the next
+bar line** (musical time is circular — arrangements move in bars), or
+instantly when stopped; the armed state is visible until the bar takes
+it. Saving snapshots the current mutes and makes that scene active.
+Going to an unsaved scene does nothing (nothing punishes). Scenes are
+session-lived — persistence arrives with the SD-card horizon item.
+CMD_SCENE 0xA9 / MSG_SCENE 0x17; scene row in the companion's Arrange
+tab (click = go, shift-click = save).
+
 ## Control surface (KeyLab, no screen)
 
 Guiding rule: **performance-critical actions must be reachable without the

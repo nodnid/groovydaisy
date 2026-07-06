@@ -88,9 +88,8 @@ Hard rules for firmware code:
 
 ## Status
 
-v2 rewrite: Phases 0–3 built; 0–2.5 hardware-verified (2026-07-05).
-Phase 3 (guitar audio looper: granule pool, tempo lock, CopyJob,
-waveform lanes, Live double-press = grab guitar) and the
-play-resumes-from-bar-top fix are committed and NOT yet verified with a
-guitar on hardware — that verification is the next action, then Phase 4
-per ROADMAP.md (quantize, swing, CC-automation capture).
+v2 rewrite: Phases 0–3 built and hardware-verified (2026-07-05),
+including guitar capture (granule pool, tempo lock, waveform lanes,
+Live double-press) and USB MIDI tier 1 (CMD_MIDI_INJECT + Web MIDI
+bridge; tools/sit_in_*.py are live-performance exercisers). Next:
+Phase 4 per ROADMAP.md (quantize, swing, CC-automation capture).

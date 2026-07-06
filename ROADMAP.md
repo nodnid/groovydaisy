@@ -7,11 +7,13 @@ design; this holds the sequence and the ambition. The product sentence:
 
 ## State as of this writing
 
-Phases 0–3 built and hardware-verified (2026-07-05), including guitar
-capture and USB MIDI tier 1. **Phase 4 (groove intelligence) is built,
-host-tested and committed — flash + feel-test is the next action**:
-does light quantize feel invisible, does 62% swing sit right, does a
-captured filter sweep + live knob ride feel like one gesture?
+Phases 0–3 hardware-verified. Phase 4 (groove) flashed AND
+hardware-verified by Claude over the serial link (tools/verify_groove.py:
+quantize OFF/HARD/LIGHT, note-off travel, early-downbeat grace — all
+measured on device 2026-07-05). **Phase 5 (the sound opens up) is built,
+host-tested and committed — flash + feel-test is the next action**: the
+reverb defaults, the dotted-8th delay, drum pitch/decay ranges, and CPU
+headroom with loops + FX running.
 
 Hard-won platform truths live in daisy_hardware.md and the memory files:
 libDaisy pinned to v5.4.0 (v7 breaks macOS CDC), BOOT_QSPI bootloader
@@ -41,17 +43,22 @@ protocol v3, companion Groove panel; SPEC.md has the as-built sections):
   Lanes render the motion as a dashed curve.
 - ✅ Velocity taming: optional x^0.6 compress on pad captures.
 
-## Phase 5 — The sound opens up
+## Phase 5 — The sound opens up (BUILT 2026-07-05, awaiting feel-test)
 
-- Reverb (ReverbSc in the reserved SDRAM region) + tempo-synced delay
-  as send FX; guitar live strip gets sends (space without loops).
-- Per-strip peak meters (accumulate in callback, publish 10 Hz) + CPU
-  load for real in the Debug tab.
-- KeyLab Bank 4 finalized: sends, FX params, metronome level, capture
-  lengths. Fix the mod-wheel/CC1 bank-switch collision (move bank
-  switching off CC 1 or debounce-guard it).
-- Drum sound design (the v1 Sampler bank promise): per-voice pitch/
-  decay/filter — the arrange view's drum lanes make this satisfying.
+- ✅ Reverb (ReverbSc, SDRAM) + tempo-synced ping-pong delay as send FX;
+  mono post-fader sends on every strip incl. guitar; gentle reverb ON by
+  default; captured tracks inherit their source strip's sends. Delay
+  divisions in 16ths, dotted-8th default, ~50 ms slew on tempo change.
+- ✅ Per-strip peak meters + master L/R + CPU % at 10 Hz (MSG_METERS);
+  meters on every companion mixer strip, CPU in the Mix tab.
+- ✅ Bank *Live* finalized: FX/swing/capture-lens on encoders, masters +
+  sends on faders. Mod-wheel/CC1 collision fixed (lone-zero + 400 ms
+  guard — wheel wiggles never switch banks).
+- ✅ Drum sound design: Bank *Drums+* = per-voice pitch (±1 octave) +
+  decay (30 ms–3 s). Per-voice filter deferred to the horizon.
+- Protocol v4 (CMD_FX/MSG_FX/MSG_METERS). Feel-test list: reverb size
+  sweet spot, dotted-8th feedback level, CPU headroom with 3 audio
+  loops + reverb, drum pitch/decay ranges.
 
 ## Phase 6 — Giggability
 

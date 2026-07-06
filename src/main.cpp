@@ -24,6 +24,7 @@
 #include "clock.h"
 #include "rt_queue.h"
 #include "mixer.h"
+#include "fx.h"
 #include "metronome.h"
 #include "sampler.h"
 #include "synth.h"
@@ -84,6 +85,7 @@ static uint8_t swing_pct       = 50;     // UI value (50..75)
 static bool    drum_vel_comp   = false;
 std::atomic<uint8_t> swing_ticks{0};     // 0..12, playback warp amount
 static bool    groove_dirty    = false;  // throttled MSG_GROOVE (encoder)
+static bool    fx_dirty        = false;  // throttled MSG_FX (encoder sweeps)
 
 // Live knob positions per automatable CC (Groove::AUTO_CCS order).
 // Main-loop written, callback-read (byte loads are atomic on M7); the
@@ -112,11 +114,13 @@ int16_t DSY_SDRAM_BSS capture_ring_mem[CAPTURE_RING_SAMPLES];
 constexpr size_t GRANULE_POOL_SAMPLES = 42UL * 1024 * 1024 / sizeof(int16_t);
 int16_t DSY_SDRAM_BSS granule_pool_mem[GRANULE_POOL_SAMPLES];
 
-// FX delay/reverb lines (Phase 5)
-uint8_t DSY_SDRAM_BSS fx_mem[2UL * 1024 * 1024];
+// Send FX (Phase 5): ReverbSc (~400 KB) + two 2 s delay lines (~770 KB).
+// The whole engine lives in SDRAM — the reverb is SDRAM-bound anyway.
+// memset before Init() (libDaisy does not zero SDRAM BSS).
+Fx::Engine DSY_SDRAM_BSS fx;
 
 static_assert(sizeof(sample_bank) + sizeof(capture_ring_mem)
-                      + sizeof(granule_pool_mem) + sizeof(fx_mem)
+                      + sizeof(granule_pool_mem) + sizeof(fx)
                   <= 62UL * 1024 * 1024,
               "SDRAM budget exceeded (64 MB minus headroom)");
 
@@ -210,6 +214,9 @@ void AudioCallback(AudioHandle::InputBuffer  in,
 
     const bool recording_audio = clk.Playing() && !clk.InPreroll();
 
+    // Tempo-synced delay retargets once per block (slewed per sample)
+    fx.UpdateTempo(clk.SamplesPerTick());
+
     size_t tick_i = 0;
     for(size_t i = 0; i < size; i++)
     {
@@ -264,11 +271,12 @@ void AudioCallback(AudioHandle::InputBuffer  in,
         synth.ProcessStereo(&sl, &sr);
         sampler.ProcessStereo(&dl, &dr);
 
-        float l = 0.0f, r = 0.0f;
-        mixer.AddStereo(Mixer::STRIP_SYNTH, sl, sr, l, r);
-        mixer.AddStereo(Mixer::STRIP_DRUMS, dl, dr, l, r);
-        mixer.AddMono(Mixer::STRIP_METRO, metro.Process(), l, r);
-        mixer.AddMono(Mixer::STRIP_GUITAR, in[0][i], l, r);
+        Mixer::Bus bus;
+        bus.Clear();
+        mixer.AddStereo(Mixer::STRIP_SYNTH, sl, sr, bus);
+        mixer.AddStereo(Mixer::STRIP_DRUMS, dl, dr, bus);
+        mixer.AddMono(Mixer::STRIP_METRO, metro.Process(), bus);
+        mixer.AddMono(Mixer::STRIP_GUITAR, in[0][i], bus);
 
         // Audio loop playback: read each active loop's current granule
         if(clk.Playing() && !clk.InPreroll())
@@ -283,14 +291,16 @@ void AudioCallback(AudioHandle::InputBuffer  in,
                     s.play_gran_off++;
                 }
                 // else: hold until the next bar-tick resync (sub-sample)
-                mixer.AddMono(audio_slots[a], v, l, r);
+                mixer.AddMono(audio_slots[a], v, bus);
             }
         }
 
-        mixer.ApplyMaster(l, r);
+        // Send FX return into the mix, then master
+        fx.Process(bus.rev, bus.dly, bus.l, bus.r);
+        mixer.ApplyMaster(bus.l, bus.r);
 
-        out[0][i] = l;
-        out[1][i] = r;
+        out[0][i] = bus.l;
+        out[1][i] = bus.r;
     }
 
     synth_voices_active.store(synth.GetActiveCount(),
@@ -514,6 +524,7 @@ void SendTrackData(int slot);
 void SendPool();
 void SendAudioPeaks(int slot);
 void SendGroove();
+void SendFx();
 
 /** Full snapshot: everything the companion needs to cold-join. */
 void SendSnapshot()
@@ -535,6 +546,7 @@ void SendSnapshot()
     SendSynthState();
     SendPool();
     SendGroove();
+    SendFx();
     for(int i = 0; i < Track::MAX_TRACKS; i++)
     {
         if(registry.Get(i).active.load())
@@ -721,6 +733,30 @@ void SendGroove()
     ui.Send(Protocol::MSG_GROOVE, p, 4);
 }
 
+void SendFx()
+{
+    uint8_t p[4]
+        = {fx.RevSizeCc(), fx.RevToneCc(), fx.DelayDiv(), fx.DelayFbCc()};
+    ui.Send(Protocol::MSG_FX, p, 4);
+}
+
+/** The one sanctioned streaming message: peaks + CPU at 10 Hz. */
+void SendMeters()
+{
+    uint8_t p[3 + Mixer::NUM_STRIPS];
+    float   ml, mr;
+    mixer.ReadMasterPeaks(ml, mr);
+    p[0] = Mixer::PeakToCc(ml);
+    p[1] = Mixer::PeakToCc(mr);
+    float cpu = cpu_meter.GetAvgCpuLoad() * 100.0f;
+    p[2] = cpu > 127.0f ? 127 : (uint8_t)(cpu + 0.5f);
+    for(int i = 0; i < Mixer::NUM_STRIPS; i++)
+    {
+        p[3 + i] = Mixer::PeakToCc(mixer.ReadPeak(i));
+    }
+    ui.Send(Protocol::MSG_METERS, p, sizeof(p));
+}
+
 static uint8_t SnapBars(uint8_t bars)
 {
     // Loop lengths are 1/2/4/8 (SPEC.md track model)
@@ -785,6 +821,13 @@ void CommitCapture(uint8_t source, uint8_t bars, uint32_t end_tick,
     }
 
     mixer.Get(slot).Reset(0.8f);
+    // The loop keeps the space it was played in: inherit the live
+    // strip's sends (Phase 5)
+    const Mixer::Strip& live_strip = mixer.Get(
+        source == Protocol::SRC_PADS ? Mixer::STRIP_DRUMS
+                                     : Mixer::STRIP_SYNTH);
+    mixer.Get(slot).send_rev = live_strip.send_rev;
+    mixer.Get(slot).send_dly = live_strip.send_dly;
     registry.Activate(slot);
     SendTrack(slot);
     SendTrackData(slot);
@@ -880,6 +923,11 @@ void StepCopyJob()
     {
         copy_job.GetPeaks(s.peaks, s.peak_count);
         mixer.Get(copy_slot).Reset(0.8f);
+        // Guitar loops keep the guitar strip's space (Phase 5)
+        mixer.Get(copy_slot).send_rev
+            = mixer.Get(Mixer::STRIP_GUITAR).send_rev;
+        mixer.Get(copy_slot).send_dly
+            = mixer.Get(Mixer::STRIP_GUITAR).send_dly;
         registry.Activate(copy_slot);
         SendTrack(copy_slot);
         SendAudioPeaks(copy_slot);
@@ -1185,6 +1233,64 @@ void ApplyParamTarget(CCMap::ParamTarget target, uint8_t cc_value)
                               std::memory_order_relaxed);
             groove_dirty = true;
             break;
+
+        // --- send FX (Phase 5) ---
+        case TARGET_FX_REV_SIZE:
+            fx.SetRevSize(cc_value);
+            fx_dirty = true;
+            break;
+        case TARGET_FX_REV_TONE:
+            fx.SetRevTone(cc_value);
+            fx_dirty = true;
+            break;
+        case TARGET_FX_DLY_DIV:
+            fx.SetDelayDiv((uint8_t)((cc_value * Fx::NUM_DIVS) / 128));
+            fx_dirty = true;
+            break;
+        case TARGET_FX_DLY_FB:
+            fx.SetDelayFb(cc_value);
+            fx_dirty = true;
+            break;
+        case TARGET_GTR_SEND_REV:
+            mixer.Get(Mixer::STRIP_GUITAR).send_rev = CCToNorm(cc_value);
+            SendMixerStrip(Mixer::STRIP_GUITAR);
+            break;
+        case TARGET_GTR_SEND_DLY:
+            mixer.Get(Mixer::STRIP_GUITAR).send_dly = CCToNorm(cc_value);
+            SendMixerStrip(Mixer::STRIP_GUITAR);
+            break;
+        case TARGET_SYNTH_SEND_REV:
+            mixer.Get(Mixer::STRIP_SYNTH).send_rev = CCToNorm(cc_value);
+            SendMixerStrip(Mixer::STRIP_SYNTH);
+            break;
+        case TARGET_DRUMS_SEND_REV:
+            mixer.Get(Mixer::STRIP_DRUMS).send_rev = CCToNorm(cc_value);
+            SendMixerStrip(Mixer::STRIP_DRUMS);
+            break;
+
+        // --- drum sound design (Phase 5) ---
+        case TARGET_DRUM_1_PITCH:
+        case TARGET_DRUM_2_PITCH:
+        case TARGET_DRUM_3_PITCH:
+        case TARGET_DRUM_4_PITCH:
+        case TARGET_DRUM_5_PITCH:
+        case TARGET_DRUM_6_PITCH:
+        case TARGET_DRUM_7_PITCH:
+        case TARGET_DRUM_8_PITCH:
+            sampler.SetPitch(target - TARGET_DRUM_1_PITCH,
+                             CCToDrumPitch(cc_value));
+            break;
+        case TARGET_DRUM_1_DECAY:
+        case TARGET_DRUM_2_DECAY:
+        case TARGET_DRUM_3_DECAY:
+        case TARGET_DRUM_4_DECAY:
+        case TARGET_DRUM_5_DECAY:
+        case TARGET_DRUM_6_DECAY:
+        case TARGET_DRUM_7_DECAY:
+        case TARGET_DRUM_8_DECAY:
+            sampler.SetDecay(target - TARGET_DRUM_1_DECAY,
+                             CCToDrumDecay(cc_value));
+            break;
         case TARGET_MASTER_OUTPUT:
             mixer.SetMaster(CCToNorm(cc_value));
             break;
@@ -1431,8 +1537,8 @@ void ProcessCommand()
                 {
                     // Same CC path as UART: bank/pickup aware
                     uint8_t            out_value;
-                    CCMap::ParamTarget target
-                        = cc_engine.ProcessCC(d1, d2, out_value);
+                    CCMap::ParamTarget target = cc_engine.ProcessCC(
+                        d1, d2, out_value, daisy::System::GetNow());
                     if(target != CCMap::TARGET_NONE)
                     {
                         ApplyParamTarget(target, out_value);
@@ -1517,6 +1623,22 @@ void ProcessCommand()
             }
             break;
 
+        case Protocol::CMD_FX:
+            if(parser.payload_len >= 2)
+            {
+                uint8_t value = parser.payload[1];
+                switch(parser.payload[0])
+                {
+                    case Protocol::FX_REV_SIZE: fx.SetRevSize(value); break;
+                    case Protocol::FX_REV_TONE: fx.SetRevTone(value); break;
+                    case Protocol::FX_DLY_DIV: fx.SetDelayDiv(value); break;
+                    case Protocol::FX_DLY_FB: fx.SetDelayFb(value); break;
+                    default: break;
+                }
+                SendFx();
+            }
+            break;
+
         case Protocol::CMD_REQ_TRACK_DATA:
             if(parser.payload_len >= 2)
             {
@@ -1588,6 +1710,13 @@ int main(void)
     hw.SetAudioBlockSize(64);
     clk.Init(hw.AudioSampleRate());
     mixer.Init();
+    // The space is on by default — gentle sends, dial to taste (Phase 5)
+    mixer.Get(Mixer::STRIP_SYNTH).send_rev  = 0.18f;
+    mixer.Get(Mixer::STRIP_GUITAR).send_rev = 0.15f;
+    mixer.Get(Mixer::STRIP_DRUMS).send_rev  = 0.08f;
+    // SDRAM object + unzeroed BSS: scrub before Init
+    memset((void*)&fx, 0, sizeof(fx));
+    fx.Init(hw.AudioSampleRate());
     metro.Init(hw.AudioSampleRate());
     metro.SetEnabled(true); // the grid must be audible before drums exist
     sampler.Init();
@@ -1756,6 +1885,21 @@ int main(void)
             last_groove_send = now;
             SendGroove();
         }
+        static uint32_t last_fx_send = 0;
+        if(fx_dirty && now - last_fx_send >= 100)
+        {
+            fx_dirty     = false;
+            last_fx_send = now;
+            SendFx();
+        }
+
+        // Meters at 10 Hz — the one sanctioned stream (SPEC.md Phase 5)
+        static uint32_t last_meter_send = 0;
+        if(now - last_meter_send >= 100)
+        {
+            last_meter_send = now;
+            SendMeters();
+        }
 
         // ------------------------------------------------------------------
         // UART MIDI from the KeyLab
@@ -1826,7 +1970,7 @@ int main(void)
 
                     uint8_t            out_value;
                     CCMap::ParamTarget target = cc_engine.ProcessCC(
-                        cc.control_number, cc.value, out_value);
+                        cc.control_number, cc.value, out_value, now);
                     if(target != CCMap::TARGET_NONE)
                     {
                         ApplyParamTarget(target, out_value);

@@ -127,6 +127,32 @@ enum ParamTarget : uint8_t
     TARGET_CAPTURE_LEN_KEYS,
     // v2 groove (Phase 4): swing percent, live-tweakable from hardware
     TARGET_SWING,
+    // v2 send FX (Phase 5)
+    TARGET_FX_REV_SIZE,
+    TARGET_FX_REV_TONE,
+    TARGET_FX_DLY_DIV,
+    TARGET_FX_DLY_FB,
+    TARGET_GTR_SEND_REV,
+    TARGET_GTR_SEND_DLY,
+    TARGET_SYNTH_SEND_REV,
+    TARGET_DRUMS_SEND_REV,
+    // v2 drum sound design (Phase 5): per-voice pitch + decay
+    TARGET_DRUM_1_PITCH,
+    TARGET_DRUM_2_PITCH,
+    TARGET_DRUM_3_PITCH,
+    TARGET_DRUM_4_PITCH,
+    TARGET_DRUM_5_PITCH,
+    TARGET_DRUM_6_PITCH,
+    TARGET_DRUM_7_PITCH,
+    TARGET_DRUM_8_PITCH,
+    TARGET_DRUM_1_DECAY,
+    TARGET_DRUM_2_DECAY,
+    TARGET_DRUM_3_DECAY,
+    TARGET_DRUM_4_DECAY,
+    TARGET_DRUM_5_DECAY,
+    TARGET_DRUM_6_DECAY,
+    TARGET_DRUM_7_DECAY,
+    TARGET_DRUM_8_DECAY,
     TARGET_COUNT
 };
 
@@ -149,31 +175,32 @@ struct BankMappings
     ControlMapping faders[NUM_FADERS];
 };
 
-// Bank 0: General (Master Controls)
+// Bank 0: Live (masters, space, groove — the campfire bank, Phase 5
+// "Bank 4 finalized". Vel>Amp/Vel>Flt moved to the app's synth panel.)
 constexpr BankMappings BANK_GENERAL_MAP = {
-    "General",
-    // Encoders (mostly unused in General)
+    "Live",
+    // Encoders: pan, the space, the groove
     {
         {TARGET_GUITAR_PAN, "GtrPan"},
-        {TARGET_NONE, "---"},
-        {TARGET_NONE, "---"},
-        {TARGET_NONE, "---"},
-        {TARGET_NONE, "---"},
-        {TARGET_NONE, "---"},
-        {TARGET_NONE, "---"},
-        {TARGET_NONE, "---"},
+        {TARGET_FX_REV_SIZE, "RevSize"},
+        {TARGET_FX_REV_TONE, "RevTone"},
+        {TARGET_FX_DLY_DIV, "DlyDiv"},
+        {TARGET_FX_DLY_FB, "DlyFb"},
+        {TARGET_SWING, "Swing"},
+        {TARGET_CAPTURE_LEN_PADS, "PadLen"},
+        {TARGET_CAPTURE_LEN_KEYS, "KeyLen"},
         {TARGET_NONE, "---"},
     },
-    // Faders
+    // Faders: masters + sends
     {
         {TARGET_DRUM_MASTER_LEVEL, "DrumMst"},
         {TARGET_SYNTH_MASTER_LEVEL, "SynthMst"},
         {TARGET_GUITAR_LEVEL, "Guitar"},
         {TARGET_METRO_LEVEL, "Metro"},
-        {TARGET_NONE, "---"},
-        {TARGET_NONE, "---"},
-        {TARGET_SYNTH_VEL_TO_AMP, "Vel>Amp"},
-        {TARGET_SYNTH_VEL_TO_FILTER, "Vel>Flt"},
+        {TARGET_GTR_SEND_REV, "GtrRev"},
+        {TARGET_GTR_SEND_DLY, "GtrDly"},
+        {TARGET_SYNTH_SEND_REV, "SynRev"},
+        {TARGET_DRUMS_SEND_REV, "DrmRev"},
         {TARGET_MASTER_OUTPUT, "Master"},
     }
 };
@@ -236,31 +263,32 @@ constexpr BankMappings BANK_SYNTH_MAP = {
     }
 };
 
-// Bank 3: Sampler (Per-Drum Sound Design - future)
+// Bank 3: Drums+ (per-voice sound design, Phase 5 — the v1 Sampler-bank
+// promise: encoder tunes a drum, the fader under it shapes its decay)
 constexpr BankMappings BANK_SAMPLER_MAP = {
-    "Sampler",
-    // Encoders (per-drum params - future expansion)
+    "Drums+",
+    // Encoders: per-voice pitch (center = as sampled, ±1 octave)
     {
-        {TARGET_NONE, "Pitch"},      // Future: selected drum pitch
-        {TARGET_NONE, "Decay"},      // Future: selected drum decay
-        {TARGET_NONE, "Filter"},     // Future: selected drum filter
-        {TARGET_NONE, "FltRes"},     // Future: selected drum filter res
-        {TARGET_SWING, "Swing"},     // 50..75% across the encoder sweep
-        {TARGET_CAPTURE_LEN_PADS, "PadLen"},
-        {TARGET_CAPTURE_LEN_KEYS, "KeyLen"},
-        {TARGET_NONE, "---"},
+        {TARGET_DRUM_1_PITCH, "D1 Pit"},
+        {TARGET_DRUM_2_PITCH, "D2 Pit"},
+        {TARGET_DRUM_3_PITCH, "D3 Pit"},
+        {TARGET_DRUM_4_PITCH, "D4 Pit"},
+        {TARGET_DRUM_5_PITCH, "D5 Pit"},
+        {TARGET_DRUM_6_PITCH, "D6 Pit"},
+        {TARGET_DRUM_7_PITCH, "D7 Pit"},
+        {TARGET_DRUM_8_PITCH, "D8 Pit"},
         {TARGET_NONE, "---"},
     },
-    // Faders (drum levels for reference)
+    // Faders: per-voice decay (30 ms .. 3 s, log)
     {
-        {TARGET_DRUM_1_LEVEL, "D1 Lvl"},
-        {TARGET_DRUM_2_LEVEL, "D2 Lvl"},
-        {TARGET_DRUM_3_LEVEL, "D3 Lvl"},
-        {TARGET_DRUM_4_LEVEL, "D4 Lvl"},
-        {TARGET_DRUM_5_LEVEL, "D5 Lvl"},
-        {TARGET_DRUM_6_LEVEL, "D6 Lvl"},
-        {TARGET_DRUM_7_LEVEL, "D7 Lvl"},
-        {TARGET_DRUM_8_LEVEL, "D8 Lvl"},
+        {TARGET_DRUM_1_DECAY, "D1 Dcy"},
+        {TARGET_DRUM_2_DECAY, "D2 Dcy"},
+        {TARGET_DRUM_3_DECAY, "D3 Dcy"},
+        {TARGET_DRUM_4_DECAY, "D4 Dcy"},
+        {TARGET_DRUM_5_DECAY, "D5 Dcy"},
+        {TARGET_DRUM_6_DECAY, "D6 Dcy"},
+        {TARGET_DRUM_7_DECAY, "D7 Dcy"},
+        {TARGET_DRUM_8_DECAY, "D8 Dcy"},
         {TARGET_DRUM_MASTER_LEVEL, "DrumMst"},
     }
 };
@@ -398,17 +426,31 @@ class Engine
     }
 
     /**
-     * Handle bank switch CCs
-     * Returns true if CC was a bank switch command
+     * Handle bank switch CCs.
+     * Returns true if the CC was consumed (bank switch OR mod wheel).
+     *
+     * CC 1 is BOTH the Part 1 button (a lone value-0 event) and the mod
+     * wheel (a stream of values ending at 0 when the spring returns).
+     * The wheel used to slot-machine the banks (v1 bug, ROADMAP Phase 5):
+     * now any nonzero CC 1 marks wheel motion, and a value-0 within
+     * WHEEL_GUARD_MS of motion is the wheel coming to rest, not a press.
      */
-    bool HandleBankSwitch(uint8_t cc, uint8_t value)
-    {
-        // KeyLab Essential sends CC 1/2 with value=0 on button press
-        // Just trigger on any CC 1/2 event regardless of value
-        (void)value;  // Unused - KeyLab always sends 0
+    static constexpr uint32_t WHEEL_GUARD_MS = 400;
 
+    bool HandleBankSwitch(uint8_t cc, uint8_t value, uint32_t now_ms)
+    {
         if(cc == CC_BANK_NEXT)
         {
+            if(value != 0)
+            {
+                last_wheel_ms_ = now_ms;
+                wheel_moved_   = true;
+                return true; // wheel motion: consumed, never a switch
+            }
+            if(wheel_moved_ && now_ms - last_wheel_ms_ < WHEEL_GUARD_MS)
+            {
+                return true; // wheel returning to rest
+            }
             uint8_t next = (current_bank_ + 1) % NUM_BANKS;
             SetBank(static_cast<Bank>(next));
             return true;
@@ -494,13 +536,15 @@ class Engine
     }
 
     /**
-     * Process a CC and get the target parameter and value
+     * Process a CC and get the target parameter and value.
+     * now_ms feeds the mod-wheel/Part-1 disambiguation on CC 1.
      * Returns TARGET_NONE if CC was not handled or fader not picked up
      */
-    ParamTarget ProcessCC(uint8_t cc, uint8_t value, uint8_t& out_value)
+    ParamTarget ProcessCC(uint8_t cc, uint8_t value, uint8_t& out_value,
+                          uint32_t now_ms)
     {
-        // Check for bank switch
-        if(HandleBankSwitch(cc, value))
+        // Check for bank switch (also swallows mod-wheel CC 1 traffic)
+        if(HandleBankSwitch(cc, value, now_ms))
         {
             return TARGET_NONE;
         }
@@ -555,6 +599,9 @@ class Engine
     uint8_t encoder_values_[NUM_ENCODERS];
     float master_output_;
     bool bank_changed_ = false;
+    // Mod-wheel / Part 1 disambiguation (both live on CC 1)
+    uint32_t last_wheel_ms_ = 0;
+    bool     wheel_moved_   = false;
 };
 
 // ============================================================================
@@ -603,6 +650,20 @@ inline int8_t CCToSemitones(uint8_t value)
 inline float CCToPan(uint8_t value)
 {
     return (static_cast<float>(value) - 64.0f) / 64.0f;
+}
+
+// Drum voice pitch: center detent = as sampled, sweep = ±1 octave
+inline float CCToDrumPitch(uint8_t value)
+{
+    return powf(2.0f, (static_cast<float>(value) - 64.0f) / 64.0f);
+}
+
+// Drum voice decay: CC -> per-sample envelope multiplier for a -60 dB
+// decay of 30 ms (fader down) .. 3 s (fader up), log taper @48k
+inline float CCToDrumDecay(uint8_t value)
+{
+    float t_sec = 0.030f * powf(100.0f, static_cast<float>(value) / 127.0f);
+    return powf(10.0f, -3.0f / (t_sec * 48000.0f));
 }
 
 // Convert pan (-1.0 to +1.0) to CC value

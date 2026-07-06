@@ -214,8 +214,21 @@ guitar live in ───────▶│  (FX sends per chan)  │      │
 - **Guitar monitoring** is straight-through in the audio callback:
   input → channel strip → mix. Latency ≈ one audio block (~1–2 ms). Guitar
   channel has level + FX send even when nothing is looped.
-- **FX are core scope, not "later"**: one shared reverb (ReverbSc) + one
-  tempo-synced delay, as send effects. Half the campfire vibe is the space.
+- **FX are core scope, not "later"** (as built, Phase 5): one shared
+  reverb (ReverbSc, DaisySP-LGPL) + one tempo-synced **ping-pong** delay,
+  as send effects. Half the campfire vibe is the space. As-built shape:
+  - Sends are **mono, post-fader** (mute silences the tail feed), one
+    rev + one dly bus accumulated by the mixer (mixer.h Bus).
+  - Delay is clocked in **16ths** (1/8, dotted 1/8 default, 1/4, dotted
+    1/4, 1/2) and slews to tempo changes over ~50 ms — tape bend, no click.
+  - Params: reverb size (feedback 0.60–0.97) + tone (LP 800 Hz–16 kHz),
+    delay division + feedback (≤0.85). CMD_FX/MSG_FX, Bank *Live*
+    encoders, and the app's Mix tab.
+  - **The space is on by default**: gentle reverb sends on synth (0.18),
+    guitar (0.15), drums (0.08). **Captured tracks inherit their source
+    strip's sends** — the loop keeps the space it was played in.
+  - Per-strip peak meters + master L/R + CPU % publish at 10 Hz
+    (MSG_METERS, sqrt taper) — the one sanctioned streaming message.
 
 ### Sample drums
 
@@ -358,13 +371,19 @@ app**; the app mirrors and extends, never gatekeeps.
 - **Live button (CC 3)** → Capture: single press = pads+keys, double
   press = guitar. (KeyLab transport buttons never reach the DIN port —
   DAW-port only. Play/stop/rewind live on the Pod and in the app.)
-- **Bank buttons (Part1/Part2/Live)** → switch encoder/fader bank:
-  - Bank 1 *Mix*: track levels + pans + mutes (loop tracks + guitar live
-    channel) — mute/unmute is the arrangement move, so it must be instant
-  - Bank 2 *Synth*: cutoff, resonance, envelopes, osc params
-  - Bank 3 *Drums*: per-voice pitch/decay/level
-  - Bank 4 *FX/Loop*: reverb/delay sends, metronome level, capture source
-    select + per-source length preset + undo / track delete
+- **Bank buttons (Part1/Part2)** → switch encoder/fader bank (as built,
+  Phase 5 — names match cc_map.h):
+  - Bank *Live* (0): FX params (rev size/tone, dly div/fb), swing,
+    capture lengths on encoders; masters + metronome + rev/dly sends +
+    master out on faders. The campfire bank.
+  - Bank *Mix* (1): drum-voice levels/pans + synth level/pan
+  - Bank *Synth* (2): cutoff, resonance, envelopes, osc params
+  - Bank *Drums+* (3): per-voice pitch (encoders, ±1 octave) + decay
+    (faders, 30 ms–3 s) + drum master
+- **Mod wheel is CC 1 = the Part 1 button's CC** (KeyLab quirk): the
+  bank switch only fires on a LONE value-0 event — any nonzero CC 1
+  marks wheel motion and suppresses switching for 400 ms, so wheel
+  wiggles never slot-machine the banks (fixed Phase 5).
 - **Fader pickup** (already built) prevents jumps on bank switch — keep.
 - Capture source select / undo / delete need physical bindings in Bank 4
   (encoder-click or fader-as-button patterns TBD — iterate hands-on; the app

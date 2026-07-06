@@ -59,7 +59,7 @@
 namespace Protocol
 {
 
-constexpr uint8_t PROTO_VER = 3; // 3: MSG_GROOVE/CMD_GROOVE (Phase 4)
+constexpr uint8_t PROTO_VER = 4; // 4: FX + meters (Phase 5)
 
 // Sync byte
 constexpr uint8_t SYNC_BYTE = 0xAA;
@@ -108,6 +108,14 @@ constexpr uint8_t MSG_GROOVE      = 0x16;
 // MSG_POOL: [bars_free:2][bars_total:2] — audio memory gauge; total==0
 //   means the pool is unlocked (no audio loops, tempo free)
 constexpr uint8_t MSG_POOL        = 0x20;
+// MSG_FX: [rev_size][rev_tone][dly_div][dly_fb] — send-FX params
+//   (Phase 5); CC scale except dly_div = index into Fx::DIV_16THS.
+//   Sent on change and in the snapshot.
+constexpr uint8_t MSG_FX          = 0x21;
+// MSG_METERS: [master_l][master_r][cpu_pct][36 strip peaks] — 10 Hz.
+//   Peaks are sqrt-tapered u8 (mixer.h PeakToCc); the one sanctioned
+//   streaming message (SPEC.md Phase 5 meters).
+constexpr uint8_t MSG_METERS      = 0x22;
 constexpr uint8_t MSG_DEBUG       = 0xFF;
 
 // MSG_MIXER/CMD_MIXER strip id for the master bus
@@ -147,6 +155,15 @@ constexpr uint8_t GROOVE_QUANT_PADS = 0;
 constexpr uint8_t GROOVE_QUANT_KEYS = 1;
 constexpr uint8_t GROOVE_SWING      = 2;
 constexpr uint8_t GROOVE_VEL_COMP   = 3;
+
+// CMD_FX: [param][value] — set one send-FX parameter; echoed as MSG_FX
+constexpr uint8_t CMD_FX = 0xA7;
+
+// CMD_FX param ids
+constexpr uint8_t FX_REV_SIZE = 0; // reverb feedback, CC scale
+constexpr uint8_t FX_REV_TONE = 1; // reverb lowpass, CC scale (log)
+constexpr uint8_t FX_DLY_DIV  = 2; // delay division index (0..4)
+constexpr uint8_t FX_DLY_FB   = 3; // delay feedback, CC scale
 
 // Capture sources
 constexpr uint8_t SRC_PADS   = 0;

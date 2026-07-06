@@ -3,7 +3,7 @@ import ConnectionStatus from './components/ConnectionStatus'
 import TransportBar from './components/TransportBar'
 import TabBar, { type TabId } from './components/global/TabBar'
 import ArrangeView from './components/arrange/ArrangeView'
-import MixPanel from './components/MixPanel'
+import MixPanel, { type StripField } from './components/MixPanel'
 import MidiMonitor, { type MidiLogEntry } from './components/MidiMonitor'
 import MidiBridge from './components/MidiBridge'
 import EngineState from './components/EngineState'
@@ -26,6 +26,8 @@ import {
   MIX_FIELD_LEVEL,
   MIX_FIELD_PAN,
   MIX_FIELD_MUTE,
+  MIX_FIELD_SEND_REV,
+  MIX_FIELD_SEND_DLY,
   buildMessage,
   buildTempoCommand,
   buildSynthParamCommand,
@@ -41,6 +43,7 @@ import {
   buildReqTrackDataCommand,
   buildMidiInjectCommand,
   buildGrooveCommand,
+  buildFxCommand,
   SRC_PADS,
   SRC_KEYS,
   SRC_GUITAR,
@@ -208,11 +211,23 @@ function App() {
     [send]
   )
   const handleStripChange = useCallback(
-    (strip: number, field: 'level' | 'pan' | 'mute', value: number) => {
+    (strip: number, field: StripField, value: number) => {
       const fieldId =
-        field === 'level' ? MIX_FIELD_LEVEL : field === 'pan' ? MIX_FIELD_PAN : MIX_FIELD_MUTE
+        field === 'level'
+          ? MIX_FIELD_LEVEL
+          : field === 'pan'
+            ? MIX_FIELD_PAN
+            : field === 'sendRev'
+              ? MIX_FIELD_SEND_REV
+              : field === 'sendDly'
+                ? MIX_FIELD_SEND_DLY
+                : MIX_FIELD_MUTE
       send(buildMixerCommand(strip, fieldId, value))
     },
+    [send]
+  )
+  const handleFx = useCallback(
+    (param: number, value: number) => send(buildFxCommand(param, value)),
     [send]
   )
   const handleMasterChange = useCallback(
@@ -450,6 +465,7 @@ function App() {
             onStripChange={handleStripChange}
             onMasterChange={handleMasterChange}
             onMetroToggle={handleMetroToggle}
+            onFx={handleFx}
             connected={connected}
           />
         )}

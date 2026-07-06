@@ -12,7 +12,7 @@ export enum Bank {
   SAMPLER = 3,
 }
 
-export const BANK_NAMES = ['General', 'Mix', 'Synth', 'Sampler'] as const
+export const BANK_NAMES = ['Live', 'Mix', 'Synth', 'Drums+'] as const
 
 export const NUM_ENCODERS = 9
 export const NUM_FADERS = 9
@@ -70,6 +70,24 @@ export enum ParamTarget {
   GUITAR_LEVEL,
   GUITAR_PAN,
   METRO_LEVEL,
+  // v2 capture lengths + groove
+  CAPTURE_LEN_PADS,
+  CAPTURE_LEN_KEYS,
+  SWING,
+  // v2 send FX (Phase 5)
+  FX_REV_SIZE,
+  FX_REV_TONE,
+  FX_DLY_DIV,
+  FX_DLY_FB,
+  GTR_SEND_REV,
+  GTR_SEND_DLY,
+  SYNTH_SEND_REV,
+  DRUMS_SEND_REV,
+  // v2 drum sound design (Phase 5)
+  DRUM_1_PITCH, DRUM_2_PITCH, DRUM_3_PITCH, DRUM_4_PITCH,
+  DRUM_5_PITCH, DRUM_6_PITCH, DRUM_7_PITCH, DRUM_8_PITCH,
+  DRUM_1_DECAY, DRUM_2_DECAY, DRUM_3_DECAY, DRUM_4_DECAY,
+  DRUM_5_DECAY, DRUM_6_DECAY, DRUM_7_DECAY, DRUM_8_DECAY,
 }
 
 // Control mapping entry
@@ -113,19 +131,33 @@ const formatSemi = (v: number) => {
   const semi = Math.round(((v - 64) * 24) / 64)
   return semi >= 0 ? `+${semi}` : `${semi}`
 }
+const formatDiv = (v: number) => {
+  const divs = ['1/8', '1/8.', '1/4', '1/4.', '1/2']
+  return divs[Math.min(Math.floor((v * 5) / 128), 4)]
+}
+const formatSwing = (v: number) => `${50 + Math.floor((v * 25) / 127)}%`
+const formatBars = (v: number) => `${1 << Math.floor(v / 32)} bar`
+const formatDrumPitch = (v: number) => {
+  const semi = Math.round(((v - 64) * 12) / 64)
+  return semi >= 0 ? `+${semi}st` : `${semi}st`
+}
+const formatDecayTime = (v: number) => {
+  const t = 0.03 * Math.pow(100, v / 127)
+  return t >= 1 ? `${t.toFixed(1)}s` : `${Math.round(t * 1000)}ms`
+}
 
-// Bank 0: General (Master Controls)
+// Bank 0: Live (masters, space, groove — Phase 5 "Bank 4 finalized")
 const BANK_GENERAL_MAPPINGS: BankMappings = {
-  bankName: 'General',
+  bankName: 'Live',
   encoders: [
     { target: ParamTarget.GUITAR_PAN, name: 'Gtr Pan', formatValue: formatPan },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.NONE, name: '---' },
+    { target: ParamTarget.FX_REV_SIZE, name: 'Rev Size', formatValue: formatPercent },
+    { target: ParamTarget.FX_REV_TONE, name: 'Rev Tone', formatValue: formatPercent },
+    { target: ParamTarget.FX_DLY_DIV, name: 'Dly Div', formatValue: formatDiv },
+    { target: ParamTarget.FX_DLY_FB, name: 'Dly FB', formatValue: formatPercent },
+    { target: ParamTarget.SWING, name: 'Swing', formatValue: formatSwing },
+    { target: ParamTarget.CAPTURE_LEN_PADS, name: 'Pad Len', formatValue: formatBars },
+    { target: ParamTarget.CAPTURE_LEN_KEYS, name: 'Key Len', formatValue: formatBars },
     { target: ParamTarget.NONE, name: '---' },
   ],
   faders: [
@@ -133,10 +165,10 @@ const BANK_GENERAL_MAPPINGS: BankMappings = {
     { target: ParamTarget.SYNTH_MASTER_LEVEL, name: 'Synth Mst', formatValue: formatPercent },
     { target: ParamTarget.GUITAR_LEVEL, name: 'Guitar', formatValue: formatPercent },
     { target: ParamTarget.METRO_LEVEL, name: 'Metro', formatValue: formatPercent },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.SYNTH_VEL_TO_AMP, name: 'Vel>Amp', formatValue: formatPercent },
-    { target: ParamTarget.SYNTH_VEL_TO_FILTER, name: 'Vel>Flt', formatValue: formatPercent },
+    { target: ParamTarget.GTR_SEND_REV, name: 'Gtr Rev', formatValue: formatPercent },
+    { target: ParamTarget.GTR_SEND_DLY, name: 'Gtr Dly', formatValue: formatPercent },
+    { target: ParamTarget.SYNTH_SEND_REV, name: 'Syn Rev', formatValue: formatPercent },
+    { target: ParamTarget.DRUMS_SEND_REV, name: 'Drm Rev', formatValue: formatPercent },
     { target: ParamTarget.MASTER_OUTPUT, name: 'Master', formatValue: formatPercent },
   ],
 }
@@ -195,29 +227,29 @@ const BANK_SYNTH_MAPPINGS: BankMappings = {
   ],
 }
 
-// Bank 3: Sampler (Per-Drum Sound Design - future)
+// Bank 3: Drums+ (per-voice sound design, Phase 5)
 const BANK_SAMPLER_MAPPINGS: BankMappings = {
-  bankName: 'Sampler',
+  bankName: 'Drums+',
   encoders: [
-    { target: ParamTarget.NONE, name: 'Pitch' },
-    { target: ParamTarget.NONE, name: 'Decay' },
-    { target: ParamTarget.NONE, name: 'Filter' },
-    { target: ParamTarget.NONE, name: 'Flt Res' },
-    { target: ParamTarget.NONE, name: 'Swing' },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.NONE, name: '---' },
-    { target: ParamTarget.NONE, name: '---' },
+    { target: ParamTarget.DRUM_1_PITCH, name: 'Kick Pit', formatValue: formatDrumPitch },
+    { target: ParamTarget.DRUM_2_PITCH, name: 'Snr Pit', formatValue: formatDrumPitch },
+    { target: ParamTarget.DRUM_3_PITCH, name: 'HHC Pit', formatValue: formatDrumPitch },
+    { target: ParamTarget.DRUM_4_PITCH, name: 'HHO Pit', formatValue: formatDrumPitch },
+    { target: ParamTarget.DRUM_5_PITCH, name: 'Clap Pit', formatValue: formatDrumPitch },
+    { target: ParamTarget.DRUM_6_PITCH, name: 'TomL Pit', formatValue: formatDrumPitch },
+    { target: ParamTarget.DRUM_7_PITCH, name: 'TomM Pit', formatValue: formatDrumPitch },
+    { target: ParamTarget.DRUM_8_PITCH, name: 'Rim Pit', formatValue: formatDrumPitch },
     { target: ParamTarget.NONE, name: '---' },
   ],
   faders: [
-    { target: ParamTarget.DRUM_1_LEVEL, name: 'Kick', formatValue: formatPercent },
-    { target: ParamTarget.DRUM_2_LEVEL, name: 'Snare', formatValue: formatPercent },
-    { target: ParamTarget.DRUM_3_LEVEL, name: 'HH-C', formatValue: formatPercent },
-    { target: ParamTarget.DRUM_4_LEVEL, name: 'HH-O', formatValue: formatPercent },
-    { target: ParamTarget.DRUM_5_LEVEL, name: 'Clap', formatValue: formatPercent },
-    { target: ParamTarget.DRUM_6_LEVEL, name: 'Tom L', formatValue: formatPercent },
-    { target: ParamTarget.DRUM_7_LEVEL, name: 'Tom M', formatValue: formatPercent },
-    { target: ParamTarget.DRUM_8_LEVEL, name: 'Rim', formatValue: formatPercent },
+    { target: ParamTarget.DRUM_1_DECAY, name: 'Kick Dcy', formatValue: formatDecayTime },
+    { target: ParamTarget.DRUM_2_DECAY, name: 'Snr Dcy', formatValue: formatDecayTime },
+    { target: ParamTarget.DRUM_3_DECAY, name: 'HHC Dcy', formatValue: formatDecayTime },
+    { target: ParamTarget.DRUM_4_DECAY, name: 'HHO Dcy', formatValue: formatDecayTime },
+    { target: ParamTarget.DRUM_5_DECAY, name: 'Clap Dcy', formatValue: formatDecayTime },
+    { target: ParamTarget.DRUM_6_DECAY, name: 'TomL Dcy', formatValue: formatDecayTime },
+    { target: ParamTarget.DRUM_7_DECAY, name: 'TomM Dcy', formatValue: formatDecayTime },
+    { target: ParamTarget.DRUM_8_DECAY, name: 'Rim Dcy', formatValue: formatDecayTime },
     { target: ParamTarget.DRUM_MASTER_LEVEL, name: 'Drum Mst', formatValue: formatPercent },
   ],
 }

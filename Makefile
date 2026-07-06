@@ -23,6 +23,10 @@ CPP_SOURCES = src/main.cpp
 LIBDAISY_DIR ?= ../DaisyExamples2/libDaisy
 DAISYSP_DIR ?= ../DaisyExamples2/DaisySP
 
+# ReverbSc moved to DaisySP-LGPL upstream; the pinned checkout ships a
+# prebuilt libdaisysp-lgpl.a and the core Makefile wires it on this flag
+USE_DAISYSP_LGPL = 1
+
 # Project includes
 C_INCLUDES += -Isrc
 

@@ -92,8 +92,10 @@ v2 rewrite: Phases 0–3 built and hardware-verified (2026-07-05),
 including guitar capture (granule pool, tempo lock, waveform lanes,
 Live double-press) and USB MIDI tier 1 (CMD_MIDI_INJECT + Web MIDI
 bridge; tools/sit_in_*.py are live-performance exercisers). Phase 4
-(groove intelligence: quantize-at-capture, playback-warp swing, CC
-automation capture with commit-time blend base, pad velocity taming;
-protocol v3) built + host-tested 2026-07-05 — awaiting flash and
-feel-test. Next: Phase 5 per ROADMAP.md (reverb/delay sends, meters,
-Bank 4 finalization, drum sound design).
+(groove: quantize, swing, CC automation, vel taming, early-downbeat
+grace) built AND hardware-verified via tools/verify_groove.py
+(2026-07-05). Phase 5 (send FX: ReverbSc + tempo-synced ping-pong
+delay, per-strip meters + CPU at 10 Hz, Bank Live/Drums+ finalized,
+mod-wheel CC1 guard, drum pitch/decay; protocol v4, USE_DAISYSP_LGPL)
+built + host-tested — awaiting flash and feel-test. Next: Phase 6
+(giggability) per ROADMAP.md.

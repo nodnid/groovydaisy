@@ -2,13 +2,40 @@ import { STRIP_GUITAR, STRIP_SYNTH, STRIP_DRUMS, STRIP_METRO } from '../core/con
 import type { DeviceState, TrackState } from '../core/state'
 import { KIND_COLORS, KIND_NAMES } from './arrange/TrackLane'
 import type { MixerState } from '../core/ccMappings'
+import {
+  FX_REV_SIZE,
+  FX_REV_TONE,
+  FX_DLY_DIV,
+  FX_DLY_FB,
+  DLY_DIV_NAMES,
+} from '../core/protocol'
+
+export type StripField = 'level' | 'pan' | 'mute' | 'sendRev' | 'sendDly'
 
 interface MixPanelProps {
   device: DeviceState
-  onStripChange: (strip: number, field: 'level' | 'pan' | 'mute', value: number) => void
+  onStripChange: (strip: number, field: StripField, value: number) => void
   onMasterChange: (value: number) => void
   onMetroToggle: (on: boolean) => void
+  onFx: (param: number, value: number) => void
   connected: boolean
+}
+
+/** Peak meter bar: sqrt-tapered u8 from MSG_METERS. */
+function Meter({ value }: { value: number }) {
+  const pct = Math.min((value / 127) * 100, 100)
+  const hot = value > 115
+  return (
+    <div className="w-full h-1 rounded bg-groove-border overflow-hidden">
+      <div
+        className="h-full rounded transition-[width] duration-100"
+        style={{
+          width: `${pct}%`,
+          background: hot ? '#f85149' : pct > 70 ? '#d29922' : '#3fb950',
+        }}
+      />
+    </div>
+  )
 }
 
 function formatPan(v: number): string {
@@ -23,6 +50,9 @@ function StripControl({
   level,
   pan,
   mute,
+  sendRev,
+  sendDly,
+  meter,
   onChange,
   connected,
   extra,
@@ -32,7 +62,10 @@ function StripControl({
   level: number
   pan: number
   mute: boolean
-  onChange: (field: 'level' | 'pan' | 'mute', value: number) => void
+  sendRev: number
+  sendDly: number
+  meter: number
+  onChange: (field: StripField, value: number) => void
   connected: boolean
   extra?: React.ReactNode
 }) {
@@ -42,6 +75,7 @@ function StripControl({
         {color && <span className="w-2 h-2 rounded-full" style={{ background: color }} />}
         {name}
       </span>
+      <Meter value={meter} />
       <input
         type="range"
         min={0}
@@ -75,6 +109,29 @@ function StripControl({
       >
         {mute ? 'MUTED' : 'MUTE'}
       </button>
+      <div className="w-full" title="Reverb send">
+        <input
+          type="range"
+          min={0}
+          max={127}
+          value={sendRev}
+          disabled={!connected}
+          onChange={(e) => onChange('sendRev', parseInt(e.target.value))}
+          className="w-full accent-purple-500 h-1"
+        />
+      </div>
+      <div className="w-full -mt-1" title="Delay send">
+        <input
+          type="range"
+          min={0}
+          max={127}
+          value={sendDly}
+          disabled={!connected}
+          onChange={(e) => onChange('sendDly', parseInt(e.target.value))}
+          className="w-full accent-cyan-500 h-1"
+        />
+      </div>
+      <span className="text-[9px] text-groove-muted -mt-1">rev / dly</span>
       {extra}
     </div>
   )
@@ -91,8 +148,10 @@ export default function MixPanel({
   onStripChange,
   onMasterChange,
   onMetroToggle,
+  onFx,
   connected,
 }: MixPanelProps) {
+  const meters = device.meters
   const tracks: TrackState[] = Object.values(device.tracks).sort(
     (a, b) => a.createdSeq - b.createdSeq
   )
@@ -124,6 +183,9 @@ export default function MixPanel({
                 level={s.level}
                 pan={s.pan}
                 mute={s.mute}
+                sendRev={s.sendRev}
+                sendDly={s.sendDly}
+                meter={meters.strips[t.slot] ?? 0}
                 connected={connected}
                 onChange={(f, v) => onStripChange(t.slot, f, v)}
               />
@@ -142,6 +204,9 @@ export default function MixPanel({
                 level={s.level}
                 pan={s.pan}
                 mute={s.mute}
+                sendRev={s.sendRev}
+                sendDly={s.sendDly}
+                meter={meters.strips[id] ?? 0}
                 connected={connected}
                 onChange={(f, v) => onStripChange(id, f, v)}
                 extra={
@@ -168,6 +233,8 @@ export default function MixPanel({
           {/* Master */}
           <div className="flex flex-col items-center gap-1.5 w-20 py-2 px-1 rounded bg-groove-bg border border-groove-accent">
             <span className="text-xs font-semibold text-groove-accent">Master</span>
+            <Meter value={meters.masterL} />
+            <Meter value={meters.masterR} />
             <input
               type="range"
               min={0}
@@ -181,6 +248,79 @@ export default function MixPanel({
               {Math.round((em.masterOut / 127) * 100)}%
             </span>
           </div>
+        </div>
+      </div>
+
+      {/* Send FX (Phase 5): one shared reverb + tempo-synced ping-pong delay */}
+      <div className="bg-groove-panel border border-groove-border rounded-lg p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-groove-text">
+            The Space <span className="text-groove-muted text-xs font-normal">reverb + delay sends</span>
+          </h2>
+          <span
+            className={`text-xs font-mono ${
+              meters.cpuPct > 80 ? 'text-groove-red' : 'text-groove-muted'
+            }`}
+          >
+            CPU {meters.cpuPct}%
+          </span>
+        </div>
+        <div className="flex gap-6 flex-wrap items-end">
+          <label className="flex flex-col gap-1 text-xs text-groove-text">
+            <span className="font-semibold text-purple-400">Reverb size</span>
+            <input
+              type="range"
+              min={0}
+              max={127}
+              value={device.fx.revSize}
+              disabled={!connected}
+              onChange={(e) => onFx(FX_REV_SIZE, parseInt(e.target.value))}
+              className="w-36 accent-purple-500"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-groove-text">
+            <span className="font-semibold text-purple-400">Reverb tone</span>
+            <input
+              type="range"
+              min={0}
+              max={127}
+              value={device.fx.revTone}
+              disabled={!connected}
+              onChange={(e) => onFx(FX_REV_TONE, parseInt(e.target.value))}
+              className="w-36 accent-purple-500"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-groove-text">
+            <span className="font-semibold text-cyan-400">Delay time</span>
+            <select
+              value={device.fx.dlyDiv}
+              disabled={!connected}
+              onChange={(e) => onFx(FX_DLY_DIV, parseInt(e.target.value))}
+              className="bg-groove-bg border border-groove-border rounded text-groove-text px-2 py-1"
+            >
+              {DLY_DIV_NAMES.map((name, i) => (
+                <option key={name} value={i}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-groove-text">
+            <span className="font-semibold text-cyan-400">Delay feedback</span>
+            <input
+              type="range"
+              min={0}
+              max={127}
+              value={device.fx.dlyFb}
+              disabled={!connected}
+              onChange={(e) => onFx(FX_DLY_FB, parseInt(e.target.value))}
+              className="w-36 accent-cyan-500"
+            />
+          </label>
+          <p className="text-[11px] text-groove-muted max-w-52">
+            Per-strip sends are the small purple/cyan sliders on each mixer
+            strip. Delay follows the tempo.
+          </p>
         </div>
       </div>
 

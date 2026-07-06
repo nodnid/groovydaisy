@@ -28,6 +28,8 @@ import {
   MSG_SRC_ACTIVITY,
   MSG_AUDIO_PEAKS,
   MSG_GROOVE,
+  MSG_FX,
+  MSG_METERS,
   MSG_POOL,
   type ParsedMessage,
   type SynthParams,
@@ -114,6 +116,22 @@ export interface PoolState {
   barsTotal: number
 }
 
+/** Send-FX params (Phase 5). */
+export interface FxState {
+  revSize: number
+  revTone: number
+  dlyDiv: number
+  dlyFb: number
+}
+
+/** Peak meters + CPU (Phase 5, 10 Hz). Strip peaks indexed by strip id. */
+export interface MeterState {
+  masterL: number
+  masterR: number
+  cpuPct: number
+  strips: number[]
+}
+
 /** Groove settings (Phase 4): quantize at capture, swing at playback. */
 export interface GrooveState {
   quantPads: number // 0 off / 1 light / 2 hard
@@ -140,6 +158,8 @@ export interface DeviceState {
   audioPeaks: Record<number, AudioPeaks> // keyed by slot (audio tracks)
   pool: PoolState
   groove: GrooveState
+  fx: FxState
+  meters: MeterState
   captureFlash: CaptureFlash | null
   srcActivity: SrcActivity
 }
@@ -172,6 +192,8 @@ export function getInitialDeviceState(): DeviceState {
     audioPeaks: {},
     pool: { barsFree: 0, barsTotal: 0 },
     groove: { quantPads: 0, quantKeys: 0, swingPct: 50, velComp: false },
+    fx: { revSize: 88, revTone: 96, dlyDiv: 1, dlyFb: 55 },
+    meters: { masterL: 0, masterR: 0, cpuPct: 0, strips: Array(36).fill(0) },
     captureFlash: null,
     srcActivity: {
       padsBarsBanked: 0,
@@ -319,6 +341,28 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
           quantKeys: msg.quantKeys,
           swingPct: msg.swingPct,
           velComp: msg.velComp,
+        },
+      }
+
+    case MSG_FX:
+      return {
+        ...state,
+        fx: {
+          revSize: msg.revSize,
+          revTone: msg.revTone,
+          dlyDiv: msg.dlyDiv,
+          dlyFb: msg.dlyFb,
+        },
+      }
+
+    case MSG_METERS:
+      return {
+        ...state,
+        meters: {
+          masterL: msg.masterL,
+          masterR: msg.masterR,
+          cpuPct: msg.cpuPct,
+          strips: msg.strips,
         },
       }
 

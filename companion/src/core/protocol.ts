@@ -34,6 +34,8 @@ export const MSG_SRC_ACTIVITY = 0x14
 export const MSG_AUDIO_PEAKS = 0x15
 export const MSG_GROOVE = 0x16
 export const MSG_POOL = 0x20
+export const MSG_FX = 0x21
+export const MSG_METERS = 0x22
 export const MSG_DEBUG = 0xff
 
 // Message types: Companion -> Daisy
@@ -56,6 +58,16 @@ export const CMD_TRACK_DELETE = 0xa2
 export const CMD_SRC_LEN = 0xa3
 export const CMD_REQ_TRACK_DATA = 0xa5
 export const CMD_GROOVE = 0xa6
+export const CMD_FX = 0xa7
+
+// CMD_FX param ids (mirrors protocol.h)
+export const FX_REV_SIZE = 0
+export const FX_REV_TONE = 1
+export const FX_DLY_DIV = 2
+export const FX_DLY_FB = 3
+
+// Delay division labels (mirrors Fx::DIV_16THS)
+export const DLY_DIV_NAMES = ['1/8', '1/8 dotted', '1/4', '1/4 dotted', '1/2'] as const
 
 // CMD_GROOVE param ids (mirrors protocol.h)
 export const GROOVE_QUANT_PADS = 0
@@ -304,6 +316,24 @@ export interface PoolMessage {
   barsTotal: number // 0 = pool unlocked (no audio loops, tempo free)
 }
 
+/** Send-FX params (Phase 5) */
+export interface FxMessage {
+  type: typeof MSG_FX
+  revSize: number // 0-127
+  revTone: number // 0-127
+  dlyDiv: number // index into DLY_DIV_NAMES
+  dlyFb: number // 0-127
+}
+
+/** Per-strip peak meters + CPU, 10 Hz (Phase 5) */
+export interface MetersMessage {
+  type: typeof MSG_METERS
+  masterL: number // 0-127, sqrt taper
+  masterR: number
+  cpuPct: number // 0-100
+  strips: number[] // 36 values, indexed by strip id
+}
+
 /** Groove settings (Phase 4): quantize at capture, swing at playback */
 export interface GrooveMessage {
   type: typeof MSG_GROOVE
@@ -368,6 +398,8 @@ export type ParsedMessage =
   | SrcActivityMessage
   | AudioPeaksMessage
   | GrooveMessage
+  | FxMessage
+  | MetersMessage
   | PoolMessage
 
 // Parser state
@@ -495,6 +527,11 @@ export function buildReqTrackDataCommand(slot: number, gen: number): Uint8Array 
 /** Set one groove parameter (GROOVE_* param ids); firmware echoes MSG_GROOVE. */
 export function buildGrooveCommand(param: number, value: number): Uint8Array {
   return buildMessage(CMD_GROOVE, new Uint8Array([param, value]))
+}
+
+/** Set one send-FX parameter (FX_* param ids); firmware echoes MSG_FX. */
+export function buildFxCommand(param: number, value: number): Uint8Array {
+  return buildMessage(CMD_FX, new Uint8Array([param, value]))
 }
 
 /** Play the box from the Mac: inject a MIDI event over the serial link. */
@@ -824,6 +861,30 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
       }
       break
 
+    case MSG_FX:
+      if (payload.length >= 4) {
+        return {
+          type: MSG_FX,
+          revSize: payload[0],
+          revTone: payload[1],
+          dlyDiv: payload[2],
+          dlyFb: payload[3],
+        }
+      }
+      break
+
+    case MSG_METERS:
+      if (payload.length >= 3) {
+        return {
+          type: MSG_METERS,
+          masterL: payload[0],
+          masterR: payload[1],
+          cpuPct: payload[2],
+          strips: Array.from(payload.slice(3)),
+        }
+      }
+      break
+
     case MSG_ENGINE_MIX:
       // [drum_levels:8][drum_pans:8][drum_master][synth_level][synth_pan][synth_master][master_out]
       if (payload.length >= 21) {
@@ -998,6 +1059,10 @@ export function getMessageTypeName(type: number): string {
       return 'AUDIO_PEAKS'
     case MSG_GROOVE:
       return 'GROOVE'
+    case MSG_FX:
+      return 'FX'
+    case MSG_METERS:
+      return 'METERS'
     case MSG_POOL:
       return 'POOL'
     case MSG_DEBUG:

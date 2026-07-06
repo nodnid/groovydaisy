@@ -1812,6 +1812,19 @@ void ProcessCommand()
             }
             break;
 
+        case Protocol::CMD_REBOOT_BOOTLOADER:
+            if(parser.payload_len >= 2 && parser.payload[0] == 0x44
+               && parser.payload[1] == 0x46)
+            {
+                // The hands-free flash ritual: drop into the Daisy
+                // bootloader and wait for DFU forever (a power cycle
+                // recovers if no flash comes). Audio stops here — this
+                // is a bench command, never a performance one.
+                daisy::System::ResetToBootloader(
+                    daisy::System::BootloaderMode::DAISY_INFINITE_TIMEOUT);
+            }
+            break;
+
         case Protocol::CMD_SCENE:
             if(parser.payload_len >= 2)
             {

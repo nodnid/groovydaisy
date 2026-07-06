@@ -146,6 +146,12 @@ constexpr uint8_t CMD_MONITOR     = 0x8A;
 // capture rings; CCs -> bank/pickup mapping). The Mac is a band member.
 constexpr uint8_t CMD_MIDI_INJECT = 0x8B;
 constexpr uint8_t CMD_REQ_STATE   = 0x90;
+// CMD_REBOOT_BOOTLOADER: [0x44][0x46] ("DF") — reboot into the Daisy
+// bootloader with an infinite DFU window: the hands-free flash ritual
+// (tools/flash.py sends this, waits for DFU, runs dfu-util). The magic
+// bytes keep a corrupted frame from ever taking the stage down; a
+// power cycle recovers from a bootloader entered by mistake.
+constexpr uint8_t CMD_REBOOT_BOOTLOADER = 0x9F;
 
 // Track/capture commands (Phase 2)
 constexpr uint8_t CMD_CAPTURE      = 0xA0; // [source (SRC_ANY=all active)][bars (0=source preset)]

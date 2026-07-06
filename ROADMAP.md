@@ -74,9 +74,15 @@ protocol v3, companion Groove panel; SPEC.md has the as-built sections):
 - tools/verify_fx.py ready for the next flash: FX round-trip, 10 Hz
   meters + CPU headroom, reverb tail + ping-pong echoes measured via
   the meter stream, mod-wheel guard, zero ring drops.
+- ✅ Hands-free flashing: CMD_REBOOT_BOOTLOADER (magic-guarded) +
+  tools/flash.py — reboot to bootloader, DFU-wait, dfu-util, proof-of-
+  life HELLO. One manual dance remains (the firmware that ANSWERS the
+  command isn't flashed yet); every flash after is one command.
+- ✅ libDaisy v7 macOS CDC issue drafted
+  (docs/libdaisy-v7-cdc-issue-draft.md) — file after re-checking a
+  fresh --recurse-submodules clone, per daisy_hardware.md.
 - Remaining: snapshot audit (golden bytes for the full snapshot burst),
-  30-min soak on hardware, undo-during-copy / play-stop-spam sweeps,
-  file the libDaisy v7 macOS CDC issue upstream with our A/B repro.
+  30-min soak on hardware, undo-during-copy / play-stop-spam sweeps.
 
 ## The horizon (what makes it *ultimate*)
 

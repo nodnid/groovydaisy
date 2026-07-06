@@ -422,13 +422,18 @@ static uint32_t ram_vectors[166] __attribute__((aligned(1024)));
 
 static void InstallFaultRecorder()
 {
+    __disable_irq();
     const uint32_t* src = (const uint32_t*)SCB->VTOR;
     for(int i = 0; i < 166; i++)
     {
         ram_vectors[i] = src[i];
     }
     ram_vectors[3] = (uint32_t)&FaultRecorder_Handler; // HardFault
-    __disable_irq();
+    // M7 vector fetches bypass the D-cache: the table writes above sit
+    // in write-back cache until cleaned, and the first exception after
+    // the VTOR switch jumps through stale RAM (this exact missing line
+    // = the second dark boot of 2026-07-06)
+    SCB_CleanDCache_by_Addr((uint32_t*)ram_vectors, sizeof(ram_vectors));
     SCB->VTOR = (uint32_t)ram_vectors;
     __DSB();
     __ISB();

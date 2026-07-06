@@ -41,6 +41,19 @@ skewed-submodule state in the local v7 checkout.
   | SDRAM | 64 MB |
   | QSPIFLASH | 7936 kB (8 MB minus 256 kB reserved by the Daisy bootloader) |
 
+- **SDRAM + C++ static init = boot crash** (found the hard way,
+  2026-07-06): a `DSY_SDRAM_BSS` object whose class has **default member
+  initializers** gets a global constructor that writes to `0xC0000000`
+  during `__libc_init_array` — which runs **before** `hw.Init()`
+  configures the FMC. The write bus-faults; the app never reaches
+  `main()`, USB never enumerates, and the box looks completely dead
+  (no DFU, no CDC — only a physical RESET recovers). Rule: classes
+  destined for SDRAM must have NO NSDMIs and only empty constructors
+  (DaisySP's `ReverbSc`/`DelayLine` follow this; that's why the
+  `ReverbSc DSY_SDRAM_BSS verb;` example pattern works). Initialize
+  everything in an `Init()` called after `hw.Init()`. Empty ctors and
+  atexit destructor registration are harmless (no SDRAM access).
+
 - **Audio**: 96 kHz / 24-bit capable; libDaisy `SaiHandle` rates: 8/16/32/48/96 kHz (default 48 kHz).
 - **Codec by Seed revision** (all pin-compatible): Rev 4 (2020–21) AK4556; Rev 5 (2021–23) WM8731; **Rev 7 (2023–) PCM3060** on SAI1 (PE2 MCLK, PE3 SD_B, PE4 FS, PE5 SCK, PE6 SD_A), hardware mode, 24-bit left-justified, no I2C control. Revision detect pins to GND: Rev 5 = PD3, Rev 7 = PD5.
 - **I/O**: 31 GPIO; 12 ADC pins; 2× 12-bit DAC; SDMMC, SPI, UART, I2S, I2C, PWM. All GPIO 5V-tolerant **except** pins 24, 25, 28, 29, 30 (A2/D17, A3/D18, A6/D21, A7/D22, A8/D23 — 3.3 V only).

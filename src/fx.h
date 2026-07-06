@@ -41,6 +41,14 @@ constexpr uint8_t NUM_DIVS    = 5;
 class Engine
 {
   public:
+    /**
+     * NO default member initializers anywhere in this class: the
+     * instance lives in DSY_SDRAM_BSS, and an NSDMI forces a global
+     * constructor that writes to SDRAM during static init — BEFORE
+     * hw.Init() configures the FMC. That is a hard fault at boot (found
+     * the hard way, 2026-07-06: the box enumerated nothing). Everything
+     * is initialized here, at runtime, after SDRAM exists.
+     */
     void Init(float sample_rate)
     {
         sample_rate_ = sample_rate;
@@ -128,19 +136,19 @@ class Engine
     }
 
   private:
-    float sample_rate_ = 48000.0f;
+    float sample_rate_;
 
     daisysp::ReverbSc verb_;
     daisysp::DelayLine<float, DELAY_MAX> dly_l_;
     daisysp::DelayLine<float, DELAY_MAX> dly_r_;
 
-    float   delay_samples_ = 24000.0f;
-    float   delay_target_  = 24000.0f;
-    float   dly_fb_        = 0.4f;
-    uint8_t div_idx_       = 1;
-    uint8_t rev_size_cc_   = 88;
-    uint8_t rev_tone_cc_   = 96;
-    uint8_t dly_fb_cc_     = 55;
+    float   delay_samples_;
+    float   delay_target_;
+    float   dly_fb_;
+    uint8_t div_idx_;
+    uint8_t rev_size_cc_;
+    uint8_t rev_tone_cc_;
+    uint8_t dly_fb_cc_;
 };
 
 } // namespace Fx

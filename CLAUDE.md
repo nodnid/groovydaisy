@@ -94,8 +94,10 @@ Live double-press) and USB MIDI tier 1 (CMD_MIDI_INJECT + Web MIDI
 bridge; tools/sit_in_*.py are live-performance exercisers). Phase 4
 (groove: quantize, swing, CC automation, vel taming, early-downbeat
 grace) built AND hardware-verified via tools/verify_groove.py
-(2026-07-05). Phase 5 (send FX: ReverbSc + tempo-synced ping-pong
-delay, per-strip meters + CPU at 10 Hz, Bank Live/Drums+ finalized,
-mod-wheel CC1 guard, drum pitch/decay; protocol v4, USE_DAISYSP_LGPL)
-built + host-tested — awaiting flash and feel-test. Next: Phase 6
-(giggability) per ROADMAP.md.
+(2026-07-05). Built + host-tested 2026-07-05/06, awaiting ONE flash +
+feel-test: Phase 5 (send FX, meters, banks, drum design; protocol v4),
+Phase 6 core (WebSerial auto-reconnect, MSG_STATS ring-drop
+diagnostics), note editing on lanes (CMD_TRACK_EDIT), and scenes
+(CMD_SCENE). Hardware verifiers ready: tools/verify_fx.py,
+tools/verify_edit.py. Next: flash, run verifiers, feel-test, then
+merge/bounce or SD persistence per ROADMAP.md horizon.

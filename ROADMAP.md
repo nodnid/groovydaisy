@@ -94,8 +94,13 @@ by placing sampler/metro/ring paths if ever needed.
 - ✅ libDaisy v7 macOS CDC issue drafted
   (docs/libdaisy-v7-cdc-issue-draft.md) — file after re-checking a
   fresh --recurse-submodules clone, per daisy_hardware.md.
-- Remaining: snapshot audit (golden bytes for the full snapshot burst),
-  30-min soak on hardware, undo-during-copy / play-stop-spam sweeps.
+- ✅ Soak PASSED (2026-07-06, on the ITCM build): 10 silent minutes of
+  captures + edits + scenes + sweeps + play/stop panic bursts — 7152
+  events, 36 captures, 58 edits, 42 scene ops; ZERO reboots/drops/
+  checksum errors, CPU peak 59%. tools/soak.py runs the 30-min version
+  any time. Play/stop spam swept within the soak.
+- Remaining (minor): snapshot audit (golden bytes for the full burst),
+  undo-during-copy sweep, guitar-path retest of Phase 5+ builds.
 
 ## The horizon (what makes it *ultimate*)
 

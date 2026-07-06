@@ -444,6 +444,37 @@ static void InstallFaultRecorder()
 static FaultRecord last_fault;
 static bool        have_last_fault = false;
 
+// ---------------------------------------------------------------------------
+// Livelock watchdog (IWDG, ~2 s) + main-loop breadcrumbs. A wedged main
+// loop leaves audio IRQs limping and the protocol dead ("running roughly,
+// dead to the app" — 2026-07-06); the hard-fault recorder can't see it
+// because nothing faults. The watchdog hardware-resets instead, and the
+// breadcrumb (in non-cacheable backup SRAM) names the section that was
+// running when time stopped. Reported via MSG_DEBUG in the next snapshot.
+// ---------------------------------------------------------------------------
+
+static volatile uint32_t* const wedge_crumb
+    = (volatile uint32_t*)(0x38800000UL + 0xC0UL);
+static uint32_t last_wedge_crumb = 0;
+
+static inline void Crumb(uint32_t section)
+{
+    *wedge_crumb = section;
+}
+
+static void StartWatchdog()
+{
+    IWDG1->KR  = 0x5555; // unlock
+    IWDG1->PR  = 4;      // LSI/64 -> 500 Hz
+    IWDG1->RLR = 1000;   // ~2 s
+    IWDG1->KR  = 0xCCCC; // start (runs until reset, cannot be stopped)
+}
+
+static inline void FeedWatchdog()
+{
+    IWDG1->KR = 0xAAAA;
+}
+
 // libDaisy's CDC_Transmit_FS/HS dereference the CDC class pointer with NO
 // null check (usbd_cdc_if.c), and that pointer only exists while a host
 // has the port CONFIGURED. Transmitting on an unplugged/unconfigured port
@@ -662,6 +693,14 @@ void SendSnapshot()
     SendGroove();
     SendFx();
     SendScene();
+    if(last_wedge_crumb != 0)
+    {
+        char wmsg[64];
+        snprintf(wmsg, sizeof(wmsg),
+                 "WATCHDOG: main loop wedged at section %lu",
+                 (unsigned long)last_wedge_crumb);
+        ui.Debug(wmsg);
+    }
     if(have_last_fault)
     {
         char msg[96];
@@ -2011,7 +2050,14 @@ int main(void)
             fault_rec->magic = 0;
             boot_reset_cause |= 0x80; // "previous run crashed" flag
         }
+        if(boot_reset_cause & 0x20) // IWDG fired: a livelock, not a fault
+        {
+            last_wedge_crumb = *wedge_crumb;
+        }
+        *wedge_crumb = 0;
     }
+
+    StartWatchdog();
 
     // FPU flush-to-zero: denormals cause 10-100x DSP slowdowns
     uint32_t fpscr = __get_FPSCR();
@@ -2108,6 +2154,8 @@ int main(void)
 
     while(1)
     {
+        FeedWatchdog();
+        Crumb(1);
         uint32_t now = System::GetNow();
 
         hw.ProcessAllControls();
@@ -2158,6 +2206,7 @@ int main(void)
         }
 
         // Drain queued protocol frames (busy-retry per port)
+        Crumb(2);
         DrainTxQueue();
 
         // Live-button single press fires after the double-press window
@@ -2169,15 +2218,19 @@ int main(void)
 
         // Pending retrospective captures fire when the clock crosses
         // their bar boundary
+        Crumb(3);
         PollPendingCaptures();
 
         // Armed scene switches fire on the bar line too
+        Crumb(4);
         PollArmedScene();
 
         // Ring -> granules copy in progress (guitar capture commit)
+        Crumb(5);
         StepCopyJob();
 
         // Sequenced CC automation from the callback -> engines
+        Crumb(6);
         DrainCcPlayback();
 
         // Transport/tempo dirty -> publish
@@ -2242,6 +2295,7 @@ int main(void)
         }
 
         // Meters at 10 Hz — the one sanctioned stream (SPEC.md Phase 5)
+        Crumb(9);
         static uint32_t last_meter_send = 0;
         if(now - last_meter_send >= 100)
         {
@@ -2269,6 +2323,7 @@ int main(void)
         // ------------------------------------------------------------------
         // UART MIDI from the KeyLab
         // ------------------------------------------------------------------
+        Crumb(7);
         hw.midi.Listen();
         while(hw.midi.HasEvents())
         {
@@ -2368,6 +2423,7 @@ int main(void)
         // ------------------------------------------------------------------
         // USB protocol input
         // ------------------------------------------------------------------
+        Crumb(8);
         {
             uint32_t h = rx_head.load(std::memory_order_acquire);
             uint32_t t = rx_tail.load(std::memory_order_relaxed);

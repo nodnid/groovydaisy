@@ -30,6 +30,7 @@ import {
   MSG_GROOVE,
   MSG_FX,
   MSG_METERS,
+  MSG_STATS,
   MSG_POOL,
   type ParsedMessage,
   type SynthParams,
@@ -132,6 +133,14 @@ export interface MeterState {
   strips: number[]
 }
 
+/** Ring-drop diagnostics (Phase 6). */
+export interface StatsState {
+  midiDrops: number
+  ccDrops: number
+  txLappedInt: number
+  txLappedExt: number
+}
+
 /** Groove settings (Phase 4): quantize at capture, swing at playback. */
 export interface GrooveState {
   quantPads: number // 0 off / 1 light / 2 hard
@@ -160,6 +169,7 @@ export interface DeviceState {
   groove: GrooveState
   fx: FxState
   meters: MeterState
+  stats: StatsState
   captureFlash: CaptureFlash | null
   srcActivity: SrcActivity
 }
@@ -194,6 +204,7 @@ export function getInitialDeviceState(): DeviceState {
     groove: { quantPads: 0, quantKeys: 0, swingPct: 50, velComp: false },
     fx: { revSize: 88, revTone: 96, dlyDiv: 1, dlyFb: 55 },
     meters: { masterL: 0, masterR: 0, cpuPct: 0, strips: Array(36).fill(0) },
+    stats: { midiDrops: 0, ccDrops: 0, txLappedInt: 0, txLappedExt: 0 },
     captureFlash: null,
     srcActivity: {
       padsBarsBanked: 0,
@@ -363,6 +374,17 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
           masterR: msg.masterR,
           cpuPct: msg.cpuPct,
           strips: msg.strips,
+        },
+      }
+
+    case MSG_STATS:
+      return {
+        ...state,
+        stats: {
+          midiDrops: msg.midiDrops,
+          ccDrops: msg.ccDrops,
+          txLappedInt: msg.txLappedInt,
+          txLappedExt: msg.txLappedExt,
         },
       }
 

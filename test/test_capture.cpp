@@ -311,3 +311,30 @@ TEST(extract_grace_note_alone_is_not_empty)
     CHECK_EQ(n, 1);
     CHECK_EQ(out[0].tick, 0u);
 }
+
+// ---------------------------------------------------------------------------
+// Edge sweeps (Phase 6 giggability): window boundaries are exact
+// ---------------------------------------------------------------------------
+
+TEST(extract_window_boundaries_are_half_open)
+{
+    MidiRing ring;
+    ring.Reset();
+    PushNote(ring, 384, 60, 100);  // exactly at start: IN
+    PushNote(ring, 500, 60, 0);
+    PushNote(ring, 767, 62, 90);   // last tick of window: IN
+    PushNote(ring, 768, 64, 80);   // exactly at end: OUT (next window's)
+
+    Track::MidiEv out[512];
+    uint16_t      n = 0;
+    ExtractWindow(ring, 768, 1, out, 512, n);
+    // 384->on, 500->off, 767->on + its synthesized off at 383
+    CHECK_EQ(n, 4);
+    bool saw_768_note = false;
+    for(uint16_t i = 0; i < n; i++)
+    {
+        if(out[i].d1 == 64)
+            saw_768_note = true;
+    }
+    CHECK(!saw_768_note);
+}

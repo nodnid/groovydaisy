@@ -36,6 +36,7 @@ export const MSG_GROOVE = 0x16
 export const MSG_POOL = 0x20
 export const MSG_FX = 0x21
 export const MSG_METERS = 0x22
+export const MSG_STATS = 0x23
 export const MSG_DEBUG = 0xff
 
 // Message types: Companion -> Daisy
@@ -334,6 +335,15 @@ export interface MetersMessage {
   strips: number[] // 36 values, indexed by strip id
 }
 
+/** Ring-drop diagnostics (Phase 6); cumulative, all-zero = healthy */
+export interface StatsMessage {
+  type: typeof MSG_STATS
+  midiDrops: number
+  ccDrops: number
+  txLappedInt: number
+  txLappedExt: number
+}
+
 /** Groove settings (Phase 4): quantize at capture, swing at playback */
 export interface GrooveMessage {
   type: typeof MSG_GROOVE
@@ -400,6 +410,7 @@ export type ParsedMessage =
   | GrooveMessage
   | FxMessage
   | MetersMessage
+  | StatsMessage
   | PoolMessage
 
 // Parser state
@@ -885,6 +896,20 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
       }
       break
 
+    case MSG_STATS:
+      if (payload.length >= 16) {
+        const u32 = (o: number) =>
+          (payload[o] | (payload[o + 1] << 8) | (payload[o + 2] << 16) | (payload[o + 3] << 24)) >>> 0
+        return {
+          type: MSG_STATS,
+          midiDrops: u32(0),
+          ccDrops: u32(4),
+          txLappedInt: u32(8),
+          txLappedExt: u32(12),
+        }
+      }
+      break
+
     case MSG_ENGINE_MIX:
       // [drum_levels:8][drum_pans:8][drum_master][synth_level][synth_pan][synth_master][master_out]
       if (payload.length >= 21) {
@@ -1063,6 +1088,8 @@ export function getMessageTypeName(type: number): string {
       return 'FX'
     case MSG_METERS:
       return 'METERS'
+    case MSG_STATS:
+      return 'STATS'
     case MSG_POOL:
       return 'POOL'
     case MSG_DEBUG:

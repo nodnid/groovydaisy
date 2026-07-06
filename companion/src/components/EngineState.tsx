@@ -1,4 +1,4 @@
-import type { TransportState } from '../core/state'
+import type { TransportState, StatsState } from '../core/state'
 
 interface EngineStateProps {
   checksumErrors?: number
@@ -6,6 +6,8 @@ interface EngineStateProps {
   synthVoices?: number
   drumVoices?: number
   protoVer: number | null
+  cpuPct: number
+  stats: StatsState
 }
 
 export default function EngineState({
@@ -14,9 +16,12 @@ export default function EngineState({
   synthVoices = 0,
   drumVoices = 0,
   protoVer,
+  cpuPct,
+  stats,
 }: EngineStateProps) {
-  // CPU load arrives with MSG_LEVELS in Phase 5; placeholder until then
-  const cpuLoad = 0
+  const cpuLoad = cpuPct
+  const anyDrops =
+    stats.midiDrops + stats.ccDrops + stats.txLappedInt + stats.txLappedExt > 0
 
   return (
     <div className="bg-groove-panel border border-groove-border rounded-lg">
@@ -114,6 +119,33 @@ export default function EngineState({
               <span className="text-groove-muted">Checksum Errors:</span>
               <span className="font-mono text-groove-red">{checksumErrors}</span>
             </div>
+          </div>
+        )}
+
+        {/* Ring-drop diagnostics: silent when healthy (Phase 6) */}
+        {anyDrops && (
+          <div className="pt-2 border-t border-groove-border space-y-1 text-sm">
+            <span className="text-groove-yellow font-semibold">Ring drops detected</span>
+            {stats.midiDrops > 0 && (
+              <div className="flex justify-between">
+                <span className="text-groove-muted">MIDI → audio:</span>
+                <span className="font-mono text-groove-red">{stats.midiDrops}</span>
+              </div>
+            )}
+            {stats.ccDrops > 0 && (
+              <div className="flex justify-between">
+                <span className="text-groove-muted">CC playback:</span>
+                <span className="font-mono text-groove-red">{stats.ccDrops}</span>
+              </div>
+            )}
+            {(stats.txLappedInt > 0 || stats.txLappedExt > 0) && (
+              <div className="flex justify-between">
+                <span className="text-groove-muted">TX lapped (int/ext):</span>
+                <span className="font-mono text-groove-yellow">
+                  {stats.txLappedInt} / {stats.txLappedExt}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>

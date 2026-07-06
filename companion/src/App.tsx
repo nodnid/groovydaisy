@@ -486,6 +486,8 @@ function App() {
                 synthVoices={device.voices.synth}
                 drumVoices={device.voices.drums}
                 protoVer={device.protoVer}
+                cpuPct={device.meters.cpuPct}
+                stats={device.stats}
               />
             </div>
 

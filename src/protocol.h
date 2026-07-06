@@ -116,6 +116,10 @@ constexpr uint8_t MSG_FX          = 0x21;
 //   Peaks are sqrt-tapered u8 (mixer.h PeakToCc); the one sanctioned
 //   streaming message (SPEC.md Phase 5 meters).
 constexpr uint8_t MSG_METERS      = 0x22;
+// MSG_STATS: [midi_drops:4][cc_drops:4][tx_lapped_int:4][tx_lapped_ext:4]
+//   (all LE, cumulative) — ring-drop diagnostics (Phase 6 giggability).
+//   Sent on change, at most 1 Hz. All-zero is the healthy steady state.
+constexpr uint8_t MSG_STATS       = 0x23;
 constexpr uint8_t MSG_DEBUG       = 0xFF;
 
 // MSG_MIXER/CMD_MIXER strip id for the master bus

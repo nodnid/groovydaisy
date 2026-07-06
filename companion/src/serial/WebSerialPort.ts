@@ -35,6 +35,7 @@ export class WebSerialPort {
   private callbacks: SerialCallbacks
   private reading = false
   private reconnectTimer: number | null = null
+  private wantConnected = false // survives unplug: drives auto-reconnect
 
   constructor(callbacks: SerialCallbacks) {
     this.callbacks = callbacks
@@ -44,6 +45,14 @@ export class WebSerialPort {
       // When any serial device disconnects, check if it was ours
       if (this.port) {
         this.handleDisconnect()
+      }
+    })
+
+    // A granted device re-enumerating (flash cycle, cable wiggle) fires
+    // 'connect' — grab it immediately instead of waiting for the poll
+    navigator.serial?.addEventListener('connect', () => {
+      if (this.wantConnected && !this.port) {
+        void this.tryReconnect()
       }
     })
   }
@@ -59,34 +68,71 @@ export class WebSerialPort {
     }
 
     try {
-      // Request port from user (we already checked isSupported so serial exists)
-      this.port = await navigator.serial!.requestPort({
-        filters: [
-          // Daisy USB CDC - STM32 VID
-          { usbVendorId: 0x0483 }
-        ]
-      })
-
-      // Open with standard baud (doesn't matter for USB CDC, but required)
-      await this.port.open({ baudRate: 115200 })
-
-      // Get writer
-      if (this.port.writable) {
-        this.writer = this.port.writable.getWriter()
+      // Reuse an already-granted port when there's exactly one (one-click
+      // reconnect after the first session); otherwise show the picker
+      const granted = (await navigator.serial!.getPorts()) ?? []
+      if (granted.length === 1) {
+        this.port = granted[0]
+      } else {
+        this.port = await navigator.serial!.requestPort({
+          filters: [
+            // Daisy USB CDC - STM32 VID
+            { usbVendorId: 0x0483 }
+          ]
+        })
       }
 
-      // Start reading
-      this.startReading()
-
-      this.callbacks.onConnect()
+      await this.openAndStart()
+      this.wantConnected = true
       return true
     } catch (error) {
+      this.port = null
       if ((error as Error).name !== 'NotFoundError') {
         // NotFoundError just means user cancelled - not a real error
         this.callbacks.onError(error as Error)
       }
       return false
     }
+  }
+
+  /** Open the selected port, wire the writer, start the read loop. */
+  private async openAndStart(): Promise<void> {
+    if (!this.port) throw new Error('no port selected')
+
+    // Open with standard baud (doesn't matter for USB CDC, but required)
+    await this.port.open({ baudRate: 115200 })
+
+    if (this.port.writable) {
+      this.writer = this.port.writable.getWriter()
+    }
+
+    this.startReading()
+    this.callbacks.onConnect()
+  }
+
+  /**
+   * Auto-reconnect (the reconnectTimer finally lives — ROADMAP Phase 6):
+   * after an unexpected disconnect, poll the granted-ports list until the
+   * Daisy re-enumerates, reopen, and let onConnect re-hydrate via
+   * CMD_REQ_STATE. No user gesture needed — the grant persists.
+   */
+  private async tryReconnect(): Promise<void> {
+    if (!this.wantConnected || this.port) return
+    try {
+      const granted = (await navigator.serial!.getPorts()) ?? []
+      if (granted.length > 0) {
+        this.port = granted[0]
+        await this.openAndStart()
+        return // reconnected — no further polling
+      }
+    } catch {
+      this.port = null
+      this.writer = null
+    }
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null
+      void this.tryReconnect()
+    }, 1000)
   }
 
   private async startReading(): Promise<void> {
@@ -133,9 +179,13 @@ export class WebSerialPort {
     this.writer = null
     this.port = null
     this.callbacks.onDisconnect()
+    if (this.wantConnected) {
+      void this.tryReconnect() // unexpected: chase the device
+    }
   }
 
   async disconnect(): Promise<void> {
+    this.wantConnected = false // user asked: stay down
     this.reading = false
 
     if (this.reconnectTimer) {

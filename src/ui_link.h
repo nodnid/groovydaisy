@@ -116,6 +116,22 @@ class Publisher
         Send(Protocol::MSG_ERROR, p, 2);
     }
 
+    /** Ring-drop diagnostics (Phase 6): cumulative counters, all LE. */
+    void Stats(uint32_t midi_drops, uint32_t cc_drops,
+               uint32_t tx_lapped_int, uint32_t tx_lapped_ext)
+    {
+        uint8_t  p[16];
+        uint32_t v[4] = {midi_drops, cc_drops, tx_lapped_int, tx_lapped_ext};
+        for(int i = 0; i < 4; i++)
+        {
+            p[i * 4 + 0] = v[i] & 0xFF;
+            p[i * 4 + 1] = (v[i] >> 8) & 0xFF;
+            p[i * 4 + 2] = (v[i] >> 16) & 0xFF;
+            p[i * 4 + 3] = (v[i] >> 24) & 0xFF;
+        }
+        Send(Protocol::MSG_STATS, p, 16);
+    }
+
     void Debug(const char* text)
     {
         size_t len = strlen(text);

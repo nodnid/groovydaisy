@@ -60,13 +60,23 @@ protocol v3, companion Groove panel; SPEC.md has the as-built sections):
   sweet spot, dotted-8th feedback level, CPU headroom with 3 audio
   loops + reverb, drum pitch/decay ranges.
 
-## Phase 6 — Giggability
+## Phase 6 — Giggability (in progress)
 
-- Snapshot audit (golden bytes), ring-drop stats surfaced, 30-min soak.
-- WebSerial auto-reconnect + re-hydrate (the dead reconnectTimer
-  finally lives). Edge sweeps per the plan (capture at boundary ±1,
-  undo during copy, play/stop spam).
-- File the libDaisy v7 macOS CDC issue upstream with our A/B repro.
+- ✅ Ring-drop stats surfaced: MSG_STATS 0x23 (midi/cc drops + TX laps),
+  sent on change ≤1 Hz; companion shows a warning block only when
+  nonzero. All-zero and silent is the healthy state.
+- ✅ WebSerial auto-reconnect + re-hydrate: the dead reconnectTimer
+  finally lives — unexpected disconnect polls getPorts() (grants
+  persist, no gesture needed), 'connect' event fast-path, reopen fires
+  onConnect → CMD_REQ_STATE re-hydrates. Single-grant fast path makes
+  "Connect" one click.
+- ✅ Capture window boundary edge tests (half-open [start, end)).
+- tools/verify_fx.py ready for the next flash: FX round-trip, 10 Hz
+  meters + CPU headroom, reverb tail + ping-pong echoes measured via
+  the meter stream, mod-wheel guard, zero ring drops.
+- Remaining: snapshot audit (golden bytes for the full snapshot burst),
+  30-min soak on hardware, undo-during-copy / play-stop-spam sweeps,
+  file the libDaisy v7 macOS CDC issue upstream with our A/B repro.
 
 ## The horizon (what makes it *ultimate*)
 

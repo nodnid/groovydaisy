@@ -1901,6 +1901,23 @@ int main(void)
             SendMeters();
         }
 
+        // Ring-drop diagnostics: on change, at most 1 Hz (Phase 6).
+        // All-zero and silent is the healthy steady state.
+        static uint32_t last_stats_send = 0;
+        static uint32_t last_stats_sum  = 0;
+        if(now - last_stats_send >= 1000)
+        {
+            uint32_t md  = midi_to_audio.Dropped();
+            uint32_t cd  = cc_from_audio.Dropped();
+            uint32_t sum = md + cd + tx_lapped_int + tx_lapped_ext;
+            if(sum != last_stats_sum)
+            {
+                last_stats_sum  = sum;
+                last_stats_send = now;
+                ui.Stats(md, cd, tx_lapped_int, tx_lapped_ext);
+            }
+        }
+
         // ------------------------------------------------------------------
         // UART MIDI from the KeyLab
         // ------------------------------------------------------------------

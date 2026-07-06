@@ -105,3 +105,31 @@ TEST(ui_link_debug_truncates_to_max_payload)
     CHECK_EQ(len, Protocol::MAX_PAYLOAD);
     CHECK_EQ(captured_len, 5 + Protocol::MAX_PAYLOAD);
 }
+
+TEST(ui_link_stats_golden_bytes)
+{
+    auto pub = MakePublisher();
+    pub.Stats(1, 0x0203, 0, 0x04050607);
+
+    // [AA][23][10 00][4x u32 LE][csum]
+    CHECK_EQ(captured_len, 21);
+    CHECK_EQ(captured[0], 0xAA);
+    CHECK_EQ(captured[1], Protocol::MSG_STATS);
+    CHECK_EQ(captured[2], 16);
+    CHECK_EQ(captured[3], 0);
+    CHECK_EQ(captured[4], 1); // midi_drops LE
+    CHECK_EQ(captured[8], 0x03); // cc_drops LE lo
+    CHECK_EQ(captured[9], 0x02);
+    CHECK_EQ(captured[16], 0x07); // tx_lapped_ext LE
+    CHECK_EQ(captured[19], 0x04);
+
+    Protocol::Parser parser;
+    parser.Reset();
+    int complete = 0;
+    for(size_t i = 0; i < captured_len; i++)
+    {
+        if(parser.Feed(captured[i]))
+            complete++;
+    }
+    CHECK_EQ(complete, 1);
+}

@@ -68,6 +68,27 @@ TEST(clock_count_in_disabled_starts_immediately)
     CHECK_NEAR(RunFor(e, 1.0f), 192, 2); // ticks flow from the start
 }
 
+TEST(clock_play_resumes_from_bar_top)
+{
+    Engine e;
+    e.Init(kSampleRate);
+    e.SetCountIn(false);
+    e.Play();
+    // Run to somewhere mid-bar-2 (tick ~500 of 384-tick bars)
+    TickBlock tb;
+    long samples = (long)(500 * (kSampleRate / 192.0f)); // 500 ticks @120
+    for(long i = 0; i < samples; i += kBlock)
+        e.Advance(kBlock, tb);
+    CHECK(e.NowTick() % 384 != 0); // genuinely mid-bar
+
+    e.Stop();
+    e.Play();
+    // Resume snaps back to the top of that bar
+    CHECK_EQ(e.NowTick() % 384, 0u);
+    CHECK_EQ(e.NowTick(), 384u);
+    CHECK_EQ(e.RunStartTick(), 384u); // ring counting aligned to bar lines
+}
+
 TEST(clock_stop_during_count_in_cancels_it)
 {
     Engine e;
@@ -137,11 +158,13 @@ TEST(clock_rewind_resets_stop_preserves)
 
     e.Stop();
     CHECK_EQ(RunFor(e, 1.0f), 0);
-    CHECK_EQ(e.NowTick(), at);
+    CHECK_EQ(e.NowTick(), at); // stopped: position frozen
 
-    e.Play();
+    e.Play(); // resumes from the TOP of the stopped bar
+    uint32_t bar_top = (at / 384) * 384;
+    CHECK_EQ(e.NowTick(), bar_top);
     RunFor(e, 0.5f);
-    CHECK(e.NowTick() > at);
+    CHECK(e.NowTick() > bar_top);
 
     e.Rewind();
     CHECK_EQ(e.NowTick(), 0);

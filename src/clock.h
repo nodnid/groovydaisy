@@ -123,6 +123,12 @@ class Engine
         if(!playing_)
         {
             playing_ = true;
+            // Resume from the TOP of the current bar: a mid-bar resume
+            // makes the count-in click into a false downbeat and knocks
+            // every bar-aligned display out of phase. Replaying a few
+            // beats is musical; dropping the band mid-bar is not.
+            tick_        = (tick_ / TICKS_PER_BAR) * TICKS_PER_BAR;
+            accumulator_ = 0.0;
             // One bar of count-in: pressing play and playing your downbeat
             // at the same instant is a two-person job otherwise
             preroll_remaining_ = count_in_ ? TICKS_PER_BAR : 0;

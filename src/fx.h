@@ -52,14 +52,11 @@ class Engine
     void Init(float sample_rate)
     {
         sample_rate_ = sample_rate;
-        // HALF-RATE reverb (CPU headroom, found in the first soak: audio
-        // broke up under full load): the reverb sees every other sample
-        // (two inputs averaged in, outputs held two samples). Init at
-        // sr/2 so its internal delay times stay correct in real time.
-        // Slightly darker, half the cost — campfire-appropriate.
-        verb_.Init(sample_rate * 0.5f);
-        rev_phase_  = 0;
-        rev_accum_  = 0.0f;
+        // FULL-RATE reverb. A half-rate experiment (2026-07-06) halved
+        // the CPU but zero-order-hold imaging above 12 kHz made the
+        // whole box sound gritty — Cleo heard it in one second. Ear
+        // wins. The CPU savings live in the sleep gates below instead.
+        verb_.Init(sample_rate);
         rev_wl_     = 0.0f;
         rev_wr_     = 0.0f;
         rev_active_ = 0;
@@ -92,9 +89,8 @@ class Engine
     void SetRevTone(uint8_t cc)
     {
         rev_tone_cc_ = cc;
-        // 800 Hz .. 11 kHz, log taper (the reverb runs at sr/2: keep the
-        // lowpass under its Nyquist)
-        verb_.SetLpFreq(800.0f * powf(13.75f, (float)cc / 127.0f));
+        // 800 Hz .. 16 kHz, log taper
+        verb_.SetLpFreq(800.0f * powf(20.0f, (float)cc / 127.0f));
     }
 
     void SetDelayDiv(uint8_t idx)
@@ -127,8 +123,8 @@ class Engine
      * Audio callback, once per sample: consume the mono send buses and
      * add the wet returns to the master bus.
      *
-     * CPU discipline (post-soak): the reverb runs half-rate; both units
-     * SLEEP when their input and audible content are gone — a silent
+     * CPU discipline (post-soak): both units SLEEP when their input
+     * and audible content are gone — a silent
      * delay/reverb costs nothing. Sleeping freezes the rings; whatever
      * remains in them is below -80 dB by construction, so waking never
      * replays anything audible.
@@ -172,22 +168,11 @@ class Engine
             }
         }
 
-        // --- reverb, half-rate (sleeps when quiet) -----------------------
+        // --- reverb, full-rate (sleeps when quiet) -----------------------
         bool rev_fed = fabsf(rev_in) > AUDIBLE;
         if(rev_active_ > 0 || rev_fed)
         {
-            rev_accum_ += rev_in;
-            if(rev_phase_ == 0)
-            {
-                rev_phase_ = 1;
-            }
-            else
-            {
-                float in = rev_accum_ * 0.5f;
-                verb_.Process(in, in, &rev_wl_, &rev_wr_);
-                rev_accum_ = 0.0f;
-                rev_phase_ = 0;
-            }
+            verb_.Process(rev_in, rev_in, &rev_wl_, &rev_wr_);
             l += rev_wl_;
             r += rev_wr_;
             if(rev_fed || fabsf(rev_wl_) > AUDIBLE || fabsf(rev_wr_) > AUDIBLE)
@@ -213,10 +198,8 @@ class Engine
     float    dly_fb_;
     uint32_t dly_active_; // samples of delay wakefulness left
     uint32_t rev_active_; // samples of reverb wakefulness left
-    float    rev_accum_;  // half-rate input averaging
-    float    rev_wl_;     // held half-rate outputs
+    float    rev_wl_;
     float    rev_wr_;
-    uint8_t  rev_phase_;
     uint8_t  div_idx_;
     uint8_t  rev_size_cc_;
     uint8_t  rev_tone_cc_;

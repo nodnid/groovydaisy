@@ -104,3 +104,27 @@ TEST(edit_move_rejects_out_of_range)
              (int)Result::NotFound);
     CHECK_EQ(ev[0].tick, 10u); // untouched
 }
+
+TEST(edit_add_note_inserts_pair_sorted)
+{
+    MidiEv   ev[8] = {{200, 0x99, 36, 100}};
+    uint16_t n     = 1;
+    CHECK_EQ((int)AddNote(ev, n, 8, 384, 48, 64, 90, 48), (int)Result::Added);
+    CHECK_EQ(n, 3);
+    CHECK_EQ(ev[0].tick, 48u);
+    CHECK(IsOn(ev[0]));
+    CHECK_EQ(ev[1].tick, 96u);
+    CHECK(IsOff(ev[1]));
+
+    // off wraps at the seam
+    CHECK_EQ((int)AddNote(ev, n, 8, 384, 370, 60, 90, 48), (int)Result::Added);
+    bool wrapped = false;
+    for(uint16_t i = 0; i < n; i++)
+        if(ev[i].d1 == 60 && IsOff(ev[i]) && ev[i].tick == (370u + 48u) % 384u)
+            wrapped = true;
+    CHECK(wrapped);
+
+    // capacity guard: 5 events + 2 > 6
+    uint16_t cap = n;
+    CHECK_EQ((int)AddNote(ev, cap, 6, 384, 10, 50, 90, 24), (int)Result::Full);
+}

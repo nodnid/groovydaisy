@@ -186,6 +186,7 @@ constexpr uint8_t CMD_TRACK_EDIT = 0xA8;
 constexpr uint8_t EDIT_TOGGLE_DRUM = 0;
 constexpr uint8_t EDIT_DELETE_NOTE = 1;
 constexpr uint8_t EDIT_MOVE_NOTE   = 2;
+constexpr uint8_t EDIT_ADD_NOTE    = 3; // a = vel, b = duration in 16ths
 
 // CMD_SCENE: [op][idx] — op 0 = save (snapshot current mutes into scene
 // idx), op 1 = go (switch on the NEXT BAR LINE while playing; instantly
@@ -230,6 +231,9 @@ constexpr uint8_t MIX_FIELD_PAN      = 1;
 constexpr uint8_t MIX_FIELD_MUTE     = 2;
 constexpr uint8_t MIX_FIELD_SEND_REV = 3;
 constexpr uint8_t MIX_FIELD_SEND_DLY = 4;
+// Guitar strip only: preamp input gain (CC scale -> 1..8x log). The
+// MSG_MIXER payload grew a 7th byte for it (0 on non-guitar strips).
+constexpr uint8_t MIX_FIELD_INPUT_GAIN = 5;
 
 // Maximum payload size
 constexpr size_t MAX_PAYLOAD = 256;

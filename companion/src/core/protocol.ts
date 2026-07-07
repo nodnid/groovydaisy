@@ -74,6 +74,7 @@ export const SCENE_NONE = 0xff
 export const EDIT_TOGGLE_DRUM = 0
 export const EDIT_DELETE_NOTE = 1
 export const EDIT_MOVE_NOTE = 2
+export const EDIT_ADD_NOTE = 3
 
 // CMD_FX param ids (mirrors protocol.h)
 export const FX_REV_SIZE = 0
@@ -146,6 +147,7 @@ export const MIX_FIELD_PAN = 1
 export const MIX_FIELD_MUTE = 2
 export const MIX_FIELD_SEND_REV = 3
 export const MIX_FIELD_SEND_DLY = 4
+export const MIX_FIELD_INPUT_GAIN = 5 // guitar strip only: preamp 1-8x
 
 // Synth parameter IDs (must match synth.h ParamId enum)
 export enum SynthParamId {
@@ -237,6 +239,7 @@ export interface MixerStripMessage {
   mute: boolean
   sendRev: number // 0-127
   sendDly: number // 0-127
+  inputGain: number // 0-127 (guitar preamp, 1-8x log); 0 elsewhere
 }
 
 export interface MetroMessage {
@@ -579,12 +582,13 @@ export function buildSceneCommand(op: number, idx: number): Uint8Array {
 /** Lane editing (horizon #1). Success republishes MSG_TRACK(+DATA) with a
  *  bumped gen — the UI just re-renders from the new truth. */
 export interface TrackEditArgs {
-  op: number // EDIT_TOGGLE_DRUM | EDIT_DELETE_NOTE | EDIT_MOVE_NOTE
+  op: number // EDIT_TOGGLE_DRUM | EDIT_DELETE_NOTE | EDIT_MOVE_NOTE | EDIT_ADD_NOTE
   tick: number
   note: number
-  vel?: number // toggle
+  vel?: number // toggle / add
   newTick?: number // move
   newNote?: number // move
+  dur16?: number // add: duration in 16ths (default 2)
 }
 
 export function buildTrackEditCommand(
@@ -593,7 +597,12 @@ export function buildTrackEditCommand(
   args: TrackEditArgs
 ): Uint8Array {
   const a = args.op === EDIT_MOVE_NOTE ? (args.newTick ?? 0) & 0xff : (args.vel ?? 100)
-  const b = args.op === EDIT_MOVE_NOTE ? ((args.newTick ?? 0) >> 8) & 0xff : 0
+  const b =
+    args.op === EDIT_MOVE_NOTE
+      ? ((args.newTick ?? 0) >> 8) & 0xff
+      : args.op === EDIT_ADD_NOTE
+        ? (args.dur16 ?? 2)
+        : 0
   const c = args.op === EDIT_MOVE_NOTE ? (args.newNote ?? args.note) : 0
   return buildMessage(
     CMD_TRACK_EDIT,
@@ -791,6 +800,7 @@ function parsePayload(type: number, payload: Uint8Array): ParsedMessage | null {
           mute: payload[3] !== 0,
           sendRev: payload[4],
           sendDly: payload[5],
+          inputGain: payload.length >= 7 ? payload[6] : 0,
         }
       }
       break

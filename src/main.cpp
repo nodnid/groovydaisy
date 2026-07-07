@@ -99,6 +99,12 @@ static uint8_t  active_scene  = Protocol::SCENE_NONE;
 static uint8_t  armed_scene   = Protocol::SCENE_NONE;
 static uint32_t scene_at_tick = 0;    // bar line the switch fires on
 
+// Guitar preamp (feel notes 2026-07-06): passive pickup into line-in
+// needs real gain. Callback-read float; main-loop written. Default
+// ~4x (+12 dB) — Cleo maxed the old fader and still wanted more.
+static float   guitar_preamp_gain    = 3.95f;
+static uint8_t guitar_preamp_cc      = 84;
+
 // Live knob positions per automatable CC (Groove::AUTO_CCS order).
 // Main-loop written, callback-read (byte loads are atomic on M7); the
 // CC-blend playback needs them, and capture commit snapshots them as
@@ -285,10 +291,14 @@ void AudioCallback(AudioHandle::InputBuffer  in,
             tick_i++;
         }
 
+        // Guitar preamp: gain + soft clip BEFORE the ring and the strip,
+        // so captures keep the boost (and the drive) they were played with
+        const float gtr = Mixer::PreampProcess(in[0][i], guitar_preamp_gain);
+
         // The box listens: every input sample lands in the rolling ring
         if(recording_audio)
         {
-            audio_ring.Write(in[0][i]);
+            audio_ring.Write(gtr);
         }
 
         float sl, sr, dl, dr;
@@ -300,7 +310,7 @@ void AudioCallback(AudioHandle::InputBuffer  in,
         mixer.AddStereo(Mixer::STRIP_SYNTH, sl, sr, bus);
         mixer.AddStereo(Mixer::STRIP_DRUMS, dl, dr, bus);
         mixer.AddMono(Mixer::STRIP_METRO, metro.Process(), bus);
-        mixer.AddMono(Mixer::STRIP_GUITAR, in[0][i], bus);
+        mixer.AddMono(Mixer::STRIP_GUITAR, gtr, bus);
 
         // Audio loop playback: read each active loop's current granule
         if(clk.Playing() && !clk.InPreroll())
@@ -645,7 +655,8 @@ void SendMixerStrip(uint8_t strip)
     const Mixer::Strip& s = mixer.Get(strip);
     ui.MixerStrip(strip, Mixer::GainToCc(s.gain), Mixer::PanToCc(s.pan),
                   s.mute, Mixer::GainToCc(s.send_rev),
-                  Mixer::GainToCc(s.send_dly));
+                  Mixer::GainToCc(s.send_dly),
+                  strip == Mixer::STRIP_GUITAR ? guitar_preamp_cc : 0);
 }
 
 void SendTransport()
@@ -1412,6 +1423,15 @@ void HandleTrackEdit(const uint8_t* p)
                                           new_tick, p[8]);
             }
             break;
+        case Protocol::EDIT_ADD_NOTE:
+            if(s.kind == Track::Kind::MidiSynth)
+            {
+                res = TrackEdit::AddNote(s.events, s.event_count,
+                                         Track::MAX_EVENTS, s.LengthTicks(),
+                                         tick, note, p[6],
+                                         (uint32_t)(p[7] ? p[7] : 2) * 24);
+            }
+            break;
         default: break;
     }
 
@@ -1573,6 +1593,11 @@ void ApplyParamTarget(CCMap::ParamTarget target, uint8_t cc_value)
         case TARGET_FX_DLY_FB:
             fx.SetDelayFb(cc_value);
             fx_dirty = true;
+            break;
+        case TARGET_GUITAR_GAIN:
+            guitar_preamp_cc   = cc_value;
+            guitar_preamp_gain = Mixer::CcToPreampGain(cc_value);
+            SendMixerStrip(Mixer::STRIP_GUITAR);
             break;
         case TARGET_GTR_SEND_REV:
             mixer.Get(Mixer::STRIP_GUITAR).send_rev = CCToNorm(cc_value);
@@ -1819,6 +1844,14 @@ void ProcessCommand()
                             break;
                         case Protocol::MIX_FIELD_SEND_DLY:
                             s.send_dly = Mixer::CcToGain(value);
+                            break;
+                        case Protocol::MIX_FIELD_INPUT_GAIN:
+                            if(strip == Mixer::STRIP_GUITAR)
+                            {
+                                guitar_preamp_cc   = value;
+                                guitar_preamp_gain
+                                    = Mixer::CcToPreampGain(value);
+                            }
                             break;
                         default: break;
                     }

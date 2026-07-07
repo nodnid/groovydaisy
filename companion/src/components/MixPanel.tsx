@@ -10,7 +10,7 @@ import {
   DLY_DIV_NAMES,
 } from '../core/protocol'
 
-export type StripField = 'level' | 'pan' | 'mute' | 'sendRev' | 'sendDly'
+export type StripField = 'level' | 'pan' | 'mute' | 'sendRev' | 'sendDly' | 'inputGain'
 
 interface MixPanelProps {
   device: DeviceState
@@ -197,6 +197,7 @@ export default function MixPanel({
           {/* Live channels */}
           {LIVE.map(({ id, name }) => {
             const s = strip(id)
+            const gainDb = Math.round(((s.inputGain ?? 0) / 127) * 18)
             return (
               <StripControl
                 key={id}
@@ -210,7 +211,24 @@ export default function MixPanel({
                 connected={connected}
                 onChange={(f, v) => onStripChange(id, f, v)}
                 extra={
-                  id === STRIP_METRO ? (
+                  id === STRIP_GUITAR ? (
+                    <div className="w-full" title="Input gain (software preamp, +0..18 dB with soft clip)">
+                      <input
+                        type="range"
+                        min={0}
+                        max={127}
+                        value={s.inputGain}
+                        disabled={!connected}
+                        onChange={(e) =>
+                          onStripChange(id, 'inputGain', parseInt(e.target.value))
+                        }
+                        className="w-full accent-orange-500 h-1"
+                      />
+                      <div className="text-[9px] text-orange-400 text-center -mt-0.5">
+                        gain +{gainDb} dB
+                      </div>
+                    </div>
+                  ) : id === STRIP_METRO ? (
                     <button
                       onClick={() => onMetroToggle(!device.metro.on)}
                       disabled={!connected}

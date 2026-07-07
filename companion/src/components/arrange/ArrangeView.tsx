@@ -5,6 +5,7 @@ import {
   type DeviceState,
 } from '../../core/state'
 import TrackLane from './TrackLane'
+import TrackEditor from './TrackEditor'
 import type { TrackEditArgs } from '../../core/protocol'
 import CaptureStrip from './CaptureStrip'
 import GroovePanel from './GroovePanel'
@@ -53,6 +54,7 @@ export default function ArrangeView({
   connected,
 }: ArrangeViewProps) {
   const [nowTick, setNowTick] = useState(0)
+  const [editingSlot, setEditingSlot] = useState<number | null>(null)
   const rafRef = useRef<number>(0)
 
   // One animation loop drives every lane's playhead
@@ -129,10 +131,21 @@ export default function ArrangeView({
               onLevel={onLevel}
               onDelete={onDelete}
               onEdit={onEdit}
+              onOpenEditor={setEditingSlot}
               connected={connected}
             />
           ))}
         </div>
+      )}
+
+      {editingSlot !== null && device.tracks[editingSlot] && (
+        <TrackEditor
+          track={device.tracks[editingSlot]}
+          data={device.trackData[editingSlot]}
+          onEdit={onEdit}
+          onClose={() => setEditingSlot(null)}
+          connected={connected}
+        />
       )}
     </div>
   )

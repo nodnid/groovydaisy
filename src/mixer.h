@@ -164,6 +164,34 @@ class Engine
     float peak_master_r_;
 };
 
+// --- Guitar preamp (Phase feel-notes, 2026-07-06) ------------------------
+// A passive pickup straight into the Pod's line-in arrives 10-20 dB
+// under line level — the strip fader tops out at 1.0 and can't help.
+// Preamp = log gain (1..8x, +18 dB) into a tanh soft clip: quiet
+// signals pass linearly, hot strums saturate warmly instead of
+// cracking the ADC ceiling. Applied BEFORE the capture ring so loops
+// keep the boost (and the drive) they were played with.
+
+inline float CcToPreampGain(uint8_t v)
+{
+    return powf(8.0f, (float)v / 127.0f); // 1..8x, log taper
+}
+
+inline uint8_t PreampGainToCc(float g)
+{
+    if(g < 1.0f)
+        g = 1.0f;
+    if(g > 8.0f)
+        g = 8.0f;
+    return (uint8_t)(logf(g) / logf(8.0f) * 127.0f + 0.5f);
+}
+
+/** One guitar input sample through the preamp. */
+inline float PreampProcess(float in, float gain)
+{
+    return tanhf(in * gain);
+}
+
 // --- CC-scale (0-127) conversions for protocol/control surface ----------
 
 inline float CcToGain(uint8_t v)

@@ -202,6 +202,29 @@ inline Result MoveNote(Track::MidiEv* ev, uint16_t& count,
     return Result::Moved;
 }
 
+/**
+ * Insert a synth note (on + off) at (tick, note): the piano-roll
+ * pencil. The off wraps mod loop length like everything else.
+ */
+inline Result AddNote(Track::MidiEv* ev, uint16_t& count,
+                      uint16_t max_events, uint32_t len_ticks,
+                      uint32_t tick, uint8_t note, uint8_t vel,
+                      uint32_t dur_ticks)
+{
+    if(tick >= len_ticks || note > 127 || count + 2 > max_events)
+    {
+        return count + 2 > max_events ? Result::Full : Result::NotFound;
+    }
+    if(dur_ticks < 1)
+        dur_ticks = 1;
+    if(dur_ticks >= len_ticks)
+        dur_ticks = len_ticks - 1;
+    ev[count++] = {tick, (uint8_t)0x90, note, (uint8_t)(vel ? vel : 96)};
+    ev[count++] = {(tick + dur_ticks) % len_ticks, (uint8_t)0x80, note, 0};
+    SortEvents(ev, count);
+    return Result::Added;
+}
+
 } // namespace TrackEdit
 
 #endif // GROOVYDAISY_TRACK_EDIT_H

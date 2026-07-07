@@ -38,6 +38,7 @@ interface TrackLaneProps {
   onLevel: (slot: number, level: number) => void
   onDelete: (slot: number, gen: number) => void
   onEdit: (slot: number, gen: number, args: TrackEditArgs) => void
+  onOpenEditor: (slot: number) => void
   connected: boolean
 }
 
@@ -327,6 +328,7 @@ export default function TrackLane({
   onLevel,
   onDelete,
   onEdit,
+  onOpenEditor,
   connected,
 }: TrackLaneProps) {
   // Lanes are editable once the content is fully assembled (edits key on
@@ -393,6 +395,16 @@ export default function TrackLane({
             className="flex-1 h-1 accent-blue-500"
             title="Track level"
           />
+          {track.kind !== KIND_AUDIO && (
+            <button
+              onClick={() => onOpenEditor(track.slot)}
+              disabled={!connected}
+              className="px-1.5 py-0.5 rounded text-[10px] bg-groove-border text-groove-muted hover:text-groove-text disabled:opacity-50"
+              title="Open the editor (the lane is a window; this is the workbench)"
+            >
+              ✎
+            </button>
+          )}
           <button
             onMouseDown={startHold}
             onMouseUp={cancelHold}

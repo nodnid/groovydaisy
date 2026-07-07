@@ -47,6 +47,7 @@ export interface StripState {
   mute: boolean
   sendRev: number
   sendDly: number
+  inputGain: number // guitar preamp cc (1-8x log); 0 elsewhere
 }
 
 export interface TransportState {
@@ -185,7 +186,7 @@ export interface DeviceState {
 }
 
 function defaultStrip(level = 101): StripState {
-  return { level, pan: 64, mute: false, sendRev: 0, sendDly: 0 }
+  return { level, pan: 64, mute: false, sendRev: 0, sendDly: 0, inputGain: 0 }
 }
 
 export function getInitialDeviceState(): DeviceState {
@@ -288,6 +289,7 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
             mute: msg.mute,
             sendRev: msg.sendRev,
             sendDly: msg.sendDly,
+            inputGain: msg.inputGain,
           },
         },
       }
@@ -321,6 +323,7 @@ export function deviceReducer(state: DeviceState, action: DeviceAction): DeviceS
             mute: msg.mute,
             sendRev: msg.sendRev,
             sendDly: msg.sendDly,
+            inputGain: 0,
           },
         },
       }

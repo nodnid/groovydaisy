@@ -100,11 +100,12 @@ class Publisher
     }
 
     void MixerStrip(uint8_t strip, uint8_t level, uint8_t pan, bool mute,
-                    uint8_t send_rev, uint8_t send_dly)
+                    uint8_t send_rev, uint8_t send_dly,
+                    uint8_t input_gain = 0)
     {
-        uint8_t p[6] = {strip, level, pan, (uint8_t)(mute ? 1 : 0),
-                        send_rev, send_dly};
-        Send(Protocol::MSG_MIXER, p, 6);
+        uint8_t p[7] = {strip, level, pan, (uint8_t)(mute ? 1 : 0),
+                        send_rev, send_dly, input_gain};
+        Send(Protocol::MSG_MIXER, p, 7);
     }
 
     void Metro(bool on, uint8_t level)

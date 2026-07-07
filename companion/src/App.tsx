@@ -28,6 +28,7 @@ import {
   MIX_FIELD_MUTE,
   MIX_FIELD_SEND_REV,
   MIX_FIELD_SEND_DLY,
+  MIX_FIELD_INPUT_GAIN,
   buildMessage,
   buildTempoCommand,
   buildSynthParamCommand,
@@ -224,7 +225,9 @@ function App() {
               ? MIX_FIELD_SEND_REV
               : field === 'sendDly'
                 ? MIX_FIELD_SEND_DLY
-                : MIX_FIELD_MUTE
+                : field === 'inputGain'
+                  ? MIX_FIELD_INPUT_GAIN
+                  : MIX_FIELD_MUTE
       send(buildMixerCommand(strip, fieldId, value))
     },
     [send]

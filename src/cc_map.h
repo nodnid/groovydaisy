@@ -136,6 +136,8 @@ enum ParamTarget : uint8_t
     TARGET_GTR_SEND_DLY,
     TARGET_SYNTH_SEND_REV,
     TARGET_DRUMS_SEND_REV,
+    // v2 guitar preamp (feel notes)
+    TARGET_GUITAR_GAIN,
     // v2 drum sound design (Phase 5): per-voice pitch + decay
     TARGET_DRUM_1_PITCH,
     TARGET_DRUM_2_PITCH,
@@ -189,7 +191,7 @@ constexpr BankMappings BANK_GENERAL_MAP = {
         {TARGET_SWING, "Swing"},
         {TARGET_CAPTURE_LEN_PADS, "PadLen"},
         {TARGET_CAPTURE_LEN_KEYS, "KeyLen"},
-        {TARGET_NONE, "---"},
+        {TARGET_GUITAR_GAIN, "GtrGain"},
     },
     // Faders: masters + sends
     {

@@ -84,3 +84,27 @@ TEST(mixer_peak_to_cc_taper)
     CHECK(PeakToCc(0.01f) >= 12);        // sqrt taper: -40 dB still visible
     CHECK(PeakToCc(0.25f) > PeakToCc(0.1f)); // monotonic
 }
+
+TEST(mixer_preamp_gain_curve_and_softclip)
+{
+    // Log taper: cc 0 = unity, cc 127 = 8x (+18 dB), monotonic
+    CHECK_NEAR(CcToPreampGain(0), 1.0f, 1e-4);
+    CHECK_NEAR(CcToPreampGain(127), 8.0f, 1e-3);
+    CHECK(CcToPreampGain(64) > 2.0f);
+    CHECK(CcToPreampGain(64) < 4.0f);
+    CHECK_EQ(PreampGainToCc(CcToPreampGain(84)), 84); // round trip
+
+    // Quiet signals pass ~linearly; hot ones saturate, never fold over
+    CHECK_NEAR(PreampProcess(0.05f, 2.0f), 0.0997f, 2e-3);
+    CHECK(PreampProcess(0.9f, 8.0f) < 1.0f);   // soft ceiling
+    CHECK(PreampProcess(0.9f, 8.0f) > 0.95f);
+    CHECK(PreampProcess(-0.9f, 8.0f) > -1.0f); // symmetric
+    // Monotonic in input (no wraparound artifacts)
+    float prev = -2.0f;
+    for(int i = -10; i <= 10; i++)
+    {
+        float y = PreampProcess(i * 0.1f, 8.0f);
+        CHECK(y > prev);
+        prev = y;
+    }
+}

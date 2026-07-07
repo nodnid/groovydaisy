@@ -85,13 +85,17 @@ TEST(ui_link_mixer_strip_layout)
     auto pub = MakePublisher();
     pub.MixerStrip(33, 101, 64, true, 12, 34);
     CHECK_EQ(captured[1], Protocol::MSG_MIXER);
-    CHECK_EQ(captured[2], 6); // payload length
+    CHECK_EQ(captured[2], 7); // payload length (7th byte = input gain)
     CHECK_EQ(captured[4], 33);
     CHECK_EQ(captured[5], 101);
     CHECK_EQ(captured[6], 64);
     CHECK_EQ(captured[7], 1);
     CHECK_EQ(captured[8], 12);
     CHECK_EQ(captured[9], 34);
+    CHECK_EQ(captured[10], 0); // non-guitar strips carry 0
+
+    pub.MixerStrip(32, 101, 64, false, 12, 34, 84);
+    CHECK_EQ(captured[10], 84); // guitar preamp cc rides along
 }
 
 TEST(ui_link_debug_truncates_to_max_payload)

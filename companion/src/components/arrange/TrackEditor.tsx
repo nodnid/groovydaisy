@@ -56,6 +56,7 @@ export default function TrackEditor({
     if (editable) onEdit(track.slot, track.gen, args)
   }
 
+  const suppressClickRef = useRef(false)
   const dragRef = useRef<null | {
     note: number
     from: number
@@ -205,7 +206,17 @@ export default function TrackEditor({
   const posToStep = (x: number) => Math.max(0, Math.min(Math.floor(x / CELL_W), steps - 1))
 
   const gridClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    // A pointerdown on a NOTE (delete or drag) is always followed by a
+    // browser-synthesized click that bubbles here — stopPropagation on
+    // the pointer event does NOT stop it. Without this guard, shift-
+    // click-delete instantly re-ADDED a note at the same cell, and
+    // every drag stacked an invisible duplicate at the drop position.
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false
+      return
+    }
     if (!editable || dragRef.current) return
+    if (e.shiftKey) return // shift is the delete gesture, never add
     const r = e.currentTarget.getBoundingClientRect()
     const note = posToNote(e.clientY - r.top)
     const step = posToStep(e.clientX - r.left)
@@ -220,6 +231,7 @@ export default function TrackEditor({
   ) => {
     e.stopPropagation()
     if (!editable) return
+    suppressClickRef.current = true // swallow the follow-up click
     if (e.shiftKey) {
       edit({ op: EDIT_DELETE_NOTE, tick: from, note })
       return

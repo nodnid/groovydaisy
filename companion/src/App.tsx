@@ -95,6 +95,33 @@ function App() {
   const serialRef = useRef<WebSerialPort | null>(null)
   const parserRef = useRef<ProtocolParser | null>(null)
 
+  // Dev mock (?mock=1): inject fake tracks so the arrange lanes render
+  // without hardware — UI work and visual debugging without the Pod.
+  useEffect(() => {
+    if (!new URLSearchParams(window.location.search).has('mock')) return
+    setConnected(true)
+    const now = performance.now()
+    const mk = (msg: ParsedMessage) => dispatch({ kind: 'message', msg, nowMs: now })
+    mk({ type: 0x01, protoVer: 5, fwMajor: 2, fwMinor: 0 } as ParsedMessage)
+    // a drum track (slot 0) and a synth track (slot 1)
+    mk({ type: 0x10, slot: 0, gen: 1, kind: 0, lengthBars: 2, mute: false,
+         level: 101, pan: 64, sendRev: 10, sendDly: 0, createdSeq: 1 } as ParsedMessage)
+    mk({ type: 0x10, slot: 1, gen: 1, kind: 1, lengthBars: 4, mute: false,
+         level: 101, pan: 64, sendRev: 23, sendDly: 26, createdSeq: 2 } as ParsedMessage)
+    mk({ type: 0x13, slot: 0, gen: 1, chunkIdx: 0, chunkCount: 1, events: [
+      { tick: 0, status: 0x99, d1: 36, d2: 100 },
+      { tick: 192, status: 0x99, d1: 38, d2: 70 },
+      { tick: 384, status: 0x99, d1: 36, d2: 90 },
+      { tick: 576, status: 0x99, d1: 43, d2: 60 },
+    ] } as ParsedMessage)
+    mk({ type: 0x13, slot: 1, gen: 1, chunkIdx: 0, chunkCount: 1, events: [
+      { tick: 0, status: 0x90, d1: 57, d2: 80 }, { tick: 300, status: 0x80, d1: 57, d2: 0 },
+      { tick: 384, status: 0x90, d1: 60, d2: 80 }, { tick: 700, status: 0x80, d1: 60, d2: 0 },
+      { tick: 768, status: 0x90, d1: 64, d2: 80 }, { tick: 1100, status: 0x80, d1: 64, d2: 0 },
+      { tick: 96, status: 0xb0, d1: 74, d2: 50 }, { tick: 480, status: 0xb0, d1: 74, d2: 90 },
+    ] } as ParsedMessage)
+  }, [])
+
   // Auto-dismiss device errors after a few seconds
   useEffect(() => {
     if (device.lastError) {

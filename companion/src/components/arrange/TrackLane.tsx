@@ -363,7 +363,7 @@ export default function TrackLane({
   return (
     <div className="flex items-stretch gap-2">
       {/* Lane header */}
-      <div className="w-36 flex-shrink-0 flex flex-col justify-center gap-1 px-2 py-1 rounded-l bg-groove-panel border border-groove-border">
+      <div className="w-44 flex-shrink-0 flex flex-col justify-center gap-1 px-2 py-1 rounded-l bg-groove-panel border border-groove-border">
         <div className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full" style={{ background: color }} />
           <span className="text-xs font-semibold text-groove-text">
@@ -392,7 +392,7 @@ export default function TrackLane({
             value={level}
             disabled={!connected}
             onChange={(e) => onLevel(track.slot, parseInt(e.target.value))}
-            className="flex-1 h-1 accent-blue-500"
+            className="flex-1 min-w-0 h-1 accent-blue-500"
             title="Track level"
           />
           {track.kind !== KIND_AUDIO && (
